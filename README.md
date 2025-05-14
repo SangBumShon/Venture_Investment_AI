@@ -48,7 +48,7 @@
 ![Architecture](images/Architecture2.png)
 
 ## LangSmith Tracking Example
-![Architecture](images/langgraph.png)
+![LangGraph](images/langgraph.png)
 
 ## Directory Structure
 ```
