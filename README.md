@@ -45,7 +45,10 @@
 - Agent `GeneratePDF`: 보고서를 pdf 형식으로 변환함
 
 ## Architecture
-![Architecture](./Architecture2.png)
+![Architecture](images/Architecture2.png)
+
+## LangSmith Tracking Example
+![Architecture](images/langgraph.png)
 
 ## Directory Structure
 ```
