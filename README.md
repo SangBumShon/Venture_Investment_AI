@@ -37,18 +37,20 @@
 - Agent `Product`: 상품 경쟁력을 평가함
 - Agent `Technology`: 기술 수준과 차별성을 평가함
 - Agent `Growth`: 성장 가능성과 시장 트렌드 적합성을 평가함
+- Agent `InternalJudgement`: 상품, 기술, 성장성을 종합하여 내부 기준을 평가함
 - Agent `Market`: 시장성(시장 수요, 산업 전망 등)을 평가함
 - Agent `Competition`: 경쟁사와의 비교를 통해 차별성을 평가함
-- Agent `Decision` : 최종 투자 여부를 판단함
-- Agent `Report`: 평가 결과를 종합하여 보고서를 생성함
+- Agent `FinalJudgement` : 최종 투자 여부를 판단함
+- Agent `GenerateReport`: 평가 결과를 종합하여 보고서를 생성함
+- Agent `GeneratePDF`: 보고서를 pdf 형식으로 변환함
 
 ## Architecture
 ![Architecture](./Architecture2.png)
 
 ## Directory Structure
 ```
-├── data/                                              # 벡터 DB 활용 문서
-├── investment_reports/                        # 평가 보고서 저장
+├── data/                                 # 벡터 DB 활용 문서
+├── investment_reports/                   # 평가 보고서 저장
 ├── startup_invest_evaluation.ipynb       # 실행 스크립트
 └── README.md
 ```
