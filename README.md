@@ -56,11 +56,3 @@
 ├── investment_reports/                   # 평가 보고서 저장
 ├── startup_invest_evaluation.ipynb       # 실행 스크립트
 └── README.md
-```
-
-## Contributors 
-- 김상헌 : 결론 도출 및 PDF 출력 에이전트
-- 김지현 : 경쟁사 분석 에이전트, Vector DB 구축
-- 손상범 : 기업 자체 평가 에이전트
-- 이상현 : 기업 자체 평가 에이전트
-- 이소희 : 시장 분석 에이전트
