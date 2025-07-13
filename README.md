@@ -7,7 +7,7 @@
 - Method: LangGraph 기반의 AI 에이전트 흐름 구성 + LangChain + GPT 기반 평가 자동화
 
 - Tools: LangGraph, LangChain, OpenAI GPT-4o, ReportLab, ChromaDB
-- 
+  
 ## Features
 - 기업 내 외부 항목 구분 평가 
     - 내부 항목 : 상품, 기술, 성장성
