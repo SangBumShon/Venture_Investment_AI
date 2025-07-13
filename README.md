@@ -27,10 +27,10 @@
 | Category   | Details                             |
 |------------|-------------------------------------|
 | Framework  | LangGraph, LangChain      |
-| LLM        | GPT-4o via OpenAI API               |
+| LLM        |  OpenAI API  - model: GPT-4o             |
 | PDF Report | ReportLab                           |
 | State Mgmt | TypedDict 기반 상태 공유 (AgentState)|
-| Logging	 | LangSmith (langchain_teddynote)     |
+| Logging	 | LangSmith      |
 | VectorDB	 | ChromaDB                            |
 
 ## Agents
