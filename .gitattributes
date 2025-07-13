@@ -1,2 +1,3 @@
-*.ipynb linguist-vendored
-*.cpp linguist-vendored
+*.py linguist-language=Python
+*.ipynb linguist-language=Python
+
