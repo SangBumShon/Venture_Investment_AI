@@ -61,12 +61,12 @@ AI_에이전트_개발자.pdf
 *.model
 *.bin
 
-# Data files (if large)
-*.csv
-*.json
-*.xml
-*.xlsx
-*.xls
+# Data files (if large) - commented out to allow project files
+# *.csv
+# *.json
+# *.xml
+# *.xlsx
+# *.xls
 
-# PDF reports (if generated)
-investment_reports/*.pdf
+# PDF reports (if generated) - commented out to allow project files
+# investment_reports/*.pdf
