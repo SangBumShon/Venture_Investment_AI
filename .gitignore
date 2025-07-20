@@ -1,3 +1,72 @@
+# Environment variables
 .env
-venv
-/.idea
+
+# Virtual environment
+venv/
+env/
+ENV/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+
+# 개발자 포트폴리오 및 관련 문서
+개발자_포트폴리오.md
+AI_에이전트_개발자.pdf
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Model files (if any)
+*.pkl
+*.pickle
+*.h5
+*.hdf5
+*.model
+*.bin
+
+# Data files (if large)
+*.csv
+*.json
+*.xml
+*.xlsx
+*.xls
+
+# PDF reports (if generated)
+investment_reports/*.pdf
