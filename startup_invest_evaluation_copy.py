@@ -39,35 +39,6 @@ import datetime
 import os
 import re
 import requests
-from langchain_pinecone import PineconeVectorStore
-import pinecone
-from pinecone import Pinecone
-
-# Pinecone 업로드(인덱싱) 전용 함수
-
-def upload_to_pinecone():
-    print("[Pinecone 인덱싱] PDF → 청크 → 임베딩 → Pinecone 업로드 시작...")
-    pinecone_api_key = os.getenv("PINECONE_API_KEY")
-    pinecone_host = os.getenv("PINECONE_HOST")
-    pinecone_index = os.getenv("PINECONE_INDEX_NAME")
-    if not (pinecone_api_key and pinecone_host and pinecone_index):
-        raise ValueError("Pinecone API 키, 호스트, 인덱스명을 .env에 설정하세요.")
-    pc = Pinecone(api_key=pinecone_api_key, host=pinecone_host)
-    # PDF → 청크
-    pdf_dir = os.path.join(os.getcwd(), "data")
-    pdf_files = [f for f in os.listdir(pdf_dir) if f.lower().endswith(".pdf")]
-    all_docs = []
-    for pdf_file in pdf_files:
-        pdf_path = os.path.join(pdf_dir, pdf_file)
-        loader = PyMuPDFLoader(pdf_path)
-        split_docs = loader.load_and_split(RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100))
-        print(f"[인덱싱] '{pdf_file}' → {len(split_docs)} 청크 생성")
-        all_docs.extend(split_docs)
-    embeddings = OpenAIEmbeddings()
-    PineconeVectorStore.from_documents(
-        all_docs, embeddings, index_name=pinecone_index, pinecone_api_key=pinecone_api_key, host=pinecone_host
-    )
-    print(f"[Pinecone 인덱싱] 완료! (총 {len(all_docs)} 청크 업로드)")
 
 # %%
 # 1. 상태 스키마 정의 (모든 Agent가 공유)
@@ -266,44 +237,132 @@ def internal_judgement(state: AgentState) -> AgentState:
         state["최종_판단"] = "보류"
     return state
 
+def compare_retrieval_methods(all_docs, query):
+    """BM25, Cosine Similarity, Hybrid 방식의 성능을 비교하는 함수"""
+    import time
+    
+    results = {}
+    
+    # 1. BM25 검색
+    print("\n[성능 비교] BM25 검색 시작...")
+    start_time = time.time()
+    bm25_retriever = BM25Retriever.from_documents(all_docs)
+    bm25_retriever.k = 5
+    bm25_docs = bm25_retriever.get_relevant_documents(query)
+    bm25_time = time.time() - start_time
+    
+    results['bm25'] = {
+        'docs': bm25_docs,
+        'time': bm25_time,
+        'count': len(bm25_docs)
+    }
+    print(f"BM25 검색 완료: {bm25_time:.3f}초, {len(bm25_docs)}개 문서")
+    
+    # 2. Cosine Similarity 검색
+    print("\n[성능 비교] Cosine Similarity 검색 시작...")
+    start_time = time.time()
+    vector_store = Chroma.from_documents(all_docs, OpenAIEmbeddings())
+    vector_retriever = vector_store.as_retriever(search_kwargs={"k": 5})
+    vector_docs = vector_retriever.get_relevant_documents(query)
+    vector_time = time.time() - start_time
+    
+    results['cosine'] = {
+        'docs': vector_docs,
+        'time': vector_time,
+        'count': len(vector_docs)
+    }
+    print(f"Cosine Similarity 검색 완료: {vector_time:.3f}초, {len(vector_docs)}개 문서")
+    
+    # 3. Hybrid 검색
+    print("\n[성능 비교] Hybrid 검색 시작...")
+    start_time = time.time()
+    ensemble_retriever = EnsembleRetriever(
+        retrievers=[bm25_retriever, vector_retriever],
+        weights=[0.5, 0.5]
+    )
+    hybrid_docs = ensemble_retriever.get_relevant_documents(query)
+    hybrid_time = time.time() - start_time
+    
+    results['hybrid'] = {
+        'docs': hybrid_docs,
+        'time': hybrid_time,
+        'count': len(hybrid_docs)
+    }
+    print(f"Hybrid 검색 완료: {hybrid_time:.3f}초, {len(hybrid_docs)}개 문서")
+    
+    # 4. 성능 비교 결과 출력
+    print("\n" + "="*60)
+    print("🔍 검색 방식별 성능 비교 결과")
+    print("="*60)
+    print(f"{'방식':<15} {'소요시간':<10} {'문서수':<8} {'상대속도':<10}")
+    print("-"*60)
+    
+    fastest_time = min(bm25_time, vector_time, hybrid_time)
+    
+    for method, data in results.items():
+        relative_speed = fastest_time / data['time']
+        method_name = {
+            'bm25': 'BM25',
+            'cosine': 'Cosine',
+            'hybrid': 'Hybrid'
+        }[method]
+        print(f"{method_name:<15} {data['time']:<10.3f} {data['count']:<8} {relative_speed:<10.2f}x")
+    
+    # 5. 문서 중복도 분석
+    print("\n📊 문서 중복도 분석:")
+    all_doc_contents = []
+    for method, data in results.items():
+        method_docs = [doc.page_content[:100] for doc in data['docs']]
+        all_doc_contents.extend(method_docs)
+    
+    unique_docs = len(set(all_doc_contents))
+    total_docs = len(all_doc_contents)
+    diversity_score = unique_docs / total_docs if total_docs > 0 else 0
+    
+    print(f"총 검색된 문서: {total_docs}개")
+    print(f"고유 문서: {unique_docs}개")
+    print(f"다양성 점수: {diversity_score:.2f} (1.0에 가까울수록 다양함)")
+    
+    return results
+
 def analyze_market(state: Dict[str, Any]) -> Dict[str, Any]:
     startup_name = state.get("startup_name", "")
     if not startup_name:
         state["시장성_점수"] = 0
         state["시장성_분석_근거"] = "스타트업 이름이 제공되지 않았습니다."
         return state
-    pinecone_api_key = os.getenv("PINECONE_API_KEY")
-    pinecone_host = os.getenv("PINECONE_HOST")
-    pinecone_index = os.getenv("PINECONE_INDEX_NAME")
-    if not (pinecone_api_key and pinecone_host and pinecone_index):
-        raise ValueError("Pinecone API 키, 호스트, 인덱스명을 .env에 설정하세요.")
-    pc = Pinecone(api_key=pinecone_api_key, host=pinecone_host)
-    embeddings = OpenAIEmbeddings()
-    vector_store = PineconeVectorStore.from_existing_index(
-        pinecone_index, embeddings
-    )
-    vector_retriever = vector_store.as_retriever(search_kwargs={"k": 5})
-    # BM25 리트리버 (PDF 청크 필요)
+
+    # ✅ PDF 폴더 내 전체 PDF 로드
     pdf_dir = os.path.join(os.getcwd(), "data")
     pdf_files = [f for f in os.listdir(pdf_dir) if f.lower().endswith(".pdf")]
+    print(f"\n[DEBUG] 폴더 내 PDF 파일 수: {len(pdf_files)}")
+
     all_docs = []
     for pdf_file in pdf_files:
         pdf_path = os.path.join(pdf_dir, pdf_file)
         loader = PyMuPDFLoader(pdf_path)
         split_docs = loader.load_and_split(RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100))
+        print(f"[DEBUG] '{pdf_file}' → {len(split_docs)} 청크 생성")
         all_docs.extend(split_docs)
-    bm25_retriever = BM25Retriever.from_documents(all_docs)
-    bm25_retriever.k = 5
-    ensemble_retriever = EnsembleRetriever(
-        retrievers=[bm25_retriever, vector_retriever],
-        weights=[0.5, 0.5]
-    )
-    retrieved_docs = ensemble_retriever.get_relevant_documents(f"{startup_name} 시장성, 시장 규모, 성장성, 수요 동향, 트렌드")
-    print(f"\n[DEBUG] 하이브리드 RAG 검색 결과 - 총 {len(retrieved_docs)}개")
+
+    # 성능 비교 실행 (선택적)
+    query = f"{startup_name} 시장성, 시장 규모, 성장성, 수요 동향, 트렌드"
+    
+    # 성능 비교를 원하면 아래 주석을 해제하세요
+    # comparison_results = compare_retrieval_methods(all_docs, query)
+    
+    # Cosine Similarity만 사용 (벡터 검색)
+    vector_store = Chroma.from_documents(all_docs, OpenAIEmbeddings())
+    vector_retriever = vector_store.as_retriever(search_kwargs={"k": 5})
+    
+    # 벡터 검색 실행
+    retrieved_docs = vector_retriever.get_relevant_documents(query)
+    print(f"\n[DEBUG] Cosine Similarity RAG 검색 결과 - 총 {len(retrieved_docs)}개")
     for i, doc in enumerate(retrieved_docs):
-        print(f"\n[하이브리드 RAG 결과 {i+1}] (Page: {doc.metadata.get('page', '알 수 없음')})\n{doc.page_content[:300]}...")
+        print(f"\n[벡터 검색 결과 {i+1}] (Page: {doc.metadata.get('page', '알 수 없음')})\n{doc.page_content[:300]}...")
+
     rag_context = "\n\n".join([f"(Page: {doc.metadata.get('page', '알 수 없음')})\n{doc.page_content}" for doc in retrieved_docs]) or "PDF에서 유의미한 정보 없음"
-    # Tavily, Web Search 등 이하 기존 코드 동일
+
     # ✅ Web Search part (Tavily)
     search_tool = TavilySearchResults(k=10)
     web_results = search_tool.invoke(f"{startup_name} AI 스타트업 시장성, 시장 규모, 성장성, 수요 동향, 트렌드 최근 6개월 기사")
@@ -726,7 +785,72 @@ graph.add_edge("GenerateReport", "GeneratePDF")  # 보고서 생성 후 PDF 생�
 graph.add_edge("GeneratePDF", END)
 
 # %%
-# 5. 사용자 입력 받기
+# 5. 성능 비교 전용 함수
+def run_performance_comparison():
+    """검색 방식들의 성능을 비교하는 전용 함수"""
+    print("=" * 60)
+    print("🔍 검색 방식 성능 비교 시스템")
+    print("=" * 60)
+    
+    # 테스트용 쿼리
+    test_queries = [
+        "AI 기술 시장 동향",
+        "스타트업 투자 트렌드",
+        "인공지능 산업 성장성"
+    ]
+    
+    # PDF 문서 로드
+    pdf_dir = os.path.join(os.getcwd(), "data")
+    pdf_files = [f for f in os.listdir(pdf_dir) if f.lower().endswith(".pdf")]
+    print(f"📄 로드된 PDF 파일: {len(pdf_files)}개")
+    
+    all_docs = []
+    for pdf_file in pdf_files:
+        pdf_path = os.path.join(pdf_dir, pdf_file)
+        loader = PyMuPDFLoader(pdf_path)
+        split_docs = loader.load_and_split(RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100))
+        all_docs.extend(split_docs)
+    
+    print(f"📝 총 문서 청크: {len(all_docs)}개")
+    
+    # 각 쿼리별로 성능 비교
+    for i, query in enumerate(test_queries, 1):
+        print(f"\n{'='*20} 쿼리 {i}: {query} {'='*20}")
+        comparison_results = compare_retrieval_methods(all_docs, query)
+        
+        # 결과 저장 (선택적)
+        # 여기에 결과를 파일로 저장하는 코드를 추가할 수 있습니다
+
+def run_query_comparison():
+    print("=" * 60)
+    print("🔍 검색 방식 성능 비교 (스타트업 이름 기반)")
+    print("=" * 60)
+    startup_name = input("비교할 스타트업 이름(질의)을 입력하세요: ").strip()
+    if not startup_name:
+        print("❌ 스타트업 이름을 입력해야 합니다.")
+        return
+
+    # PDF 문서 로드
+    pdf_dir = os.path.join(os.getcwd(), "data")
+    pdf_files = [f for f in os.listdir(pdf_dir) if f.lower().endswith(".pdf")]
+    all_docs = []
+    for pdf_file in pdf_files:
+        pdf_path = os.path.join(pdf_dir, pdf_file)
+        loader = PyMuPDFLoader(pdf_path)
+        split_docs = loader.load_and_split(RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100))
+        all_docs.extend(split_docs)
+
+    query = f"{startup_name} 시장성, 시장 규모, 성장성, 수요 동향, 트렌드"
+    results = compare_retrieval_methods(all_docs, query)
+
+    # 각 방식별 검색 문서 내용 출력
+    for method, data in results.items():
+        print(f"\n{'='*20} {method.upper()} 검색 결과 {'='*20}")
+        for i, doc in enumerate(data['docs'], 1):
+            print(f"[{i}] (Page: {doc.metadata.get('page', '알 수 없음')})\n{doc.page_content[:300]}...\n")
+
+# %%
+# 6. 사용자 입력 받기
 def get_startup_name():
     """사용자로부터 분석할 AI 스타트업 이름을 입력받는 함수"""
     print("=" * 60)
@@ -747,7 +871,7 @@ def get_startup_name():
             print("❌ 스타트업 이름을 입력해주세요.")
 
 # %%
-# 6. 실행
+# 7. 실행
 if __name__ == "__main__":
     print("=" * 60)
     print("🤖 AI 스타트업 투자 평가 시스템")
@@ -755,30 +879,22 @@ if __name__ == "__main__":
     print("1. 스타트업 분석 실행")
     print("2. 검색 방식 성능 비교 (샘플 쿼리)")
     print("3. 검색 방식 성능 비교 (스타트업 이름 입력)")
-    print("4. PDF → Pinecone 인덱싱 (문서 바뀔 때만 실행)")
     print("-" * 60)
-    choice = input("선택하세요 (1, 2, 3, 4): ").strip()
+    
+    choice = input("선택하세요 (1, 2, 3): ").strip()
+    
     if choice == "2":
-        # run_performance_comparison() # 이 함수는 추가되지 않았으므로 주석 처리
-        print("검색 방식 성능 비교 기능은 아직 구현되지 않았습니다.")
+        run_performance_comparison()
     elif choice == "3":
-        # run_query_comparison() # 이 함수는 추가되지 않았으므로 주석 처리
-        print("검색 방식 성능 비교 기능은 아직 구현되지 않았습니다.")
-    elif choice == "4":
-        upload_to_pinecone()
+        run_query_comparison()
     else:
         startup_name = get_startup_name()
-        
         # Graph 컴파일 및 실행
         compiled_graph = graph.compile()
-        
-        # 초기 상태 설정
         initial_state = {"startup_name": startup_name}
-        
         try:
             print("🔄 AI 분석 시스템이 작동 중입니다...")
             result = compiled_graph.invoke(initial_state)
-            
             # 결과 출력
             print("\n" + "=" * 60)
             print("✅ 분석 완료!")
@@ -786,10 +902,8 @@ if __name__ == "__main__":
             print(f"📄 보고서 생성 완료: {result['pdf_path']}")
             print(f"📊 총점: {sum([result.get('상품_점수', 0), result.get('기술_점수', 0), result.get('성장률_점수', 0), result.get('시장성_점수', 0), result.get('경쟁사_점수', 0)]) / 5:.1f}/100")
             print(f"🎯 최종 판단: {result.get('최종_판단', 'N/A')}")
-            
             print("\n--- 보고서 내용 미리보기 ---")
             print(result["보고서"][:500] + "...")
-            
         except Exception as e:
             print(f"\n❌ 분석 중 오류가 발생했습니다: {e}")
             print("API 키 설정을 확인하거나 네트워크 연결을 확인해주세요.")
