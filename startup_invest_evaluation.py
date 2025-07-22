@@ -11,10 +11,12 @@ from typing import TypedDict, Literal, List, Dict, Any
 from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
+
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib import colors
+
 import datetime
 import os
 import requests
@@ -126,10 +128,7 @@ class AgentState(TypedDict, total=False):
     경쟁사_분석_근거: str
 
 # 2. LLM 초기화
-llm = ChatOpenAI(model="gpt-4o", temperature=0)
-
-import re
-from typing import List
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
 def analyze_product(state: AgentState) -> AgentState:
     startup_name = state.get("startup_name", "")
@@ -138,13 +137,13 @@ def analyze_product(state: AgentState) -> AgentState:
         state["상품_분석_근거"] = "스타트업 이름이 제공되지 않았습니다."
         return state
 
-    # Env에서 API 키 로드
-    travily_key = os.getenv("TAVILY_API_KEY")
-    naver_id = os.getenv("NAVER_CLIENT_ID")
-    naver_secret = os.getenv("NAVER_CLIENT_SECRET")
-    if not travily_key or not naver_id or not naver_secret:
+    try:
+        # API 키 검증
+        from utils import validate_api_keys
+        validate_api_keys(["tavily_key", "naver_id", "naver_secret"])
+    except ValueError as e:
         state["상품_점수"] = 0
-        state["상품_분석_근거"] = "API 키가 설정되지 않았습니다. .env 파일을 확인해주세요."
+        state["상품_분석_근거"] = str(e)
         return state
 
     checklist = [
@@ -159,100 +158,31 @@ def analyze_product(state: AgentState) -> AgentState:
         "경쟁 제품 대비 우위가 있는가?",
         "고객 피드백 수집 및 반영 체계가 갖춰져 있는가?"
     ]
-    items_formatted = "\n".join(f"{i+1}. {q}" for i, q in enumerate(checklist))
+    items_formatted = format_checklist_items(checklist)
 
-    # Travily API
-    travily_url = "https://api.tavily.com/v1/search"
-    travily_params = {"query": startup_name, "limit": 5}
-    travily_headers = {"Authorization": f"Bearer {travily_key}"}
-    travily_res = requests.get(travily_url, params=travily_params, headers=travily_headers)
-    travily_items = travily_res.json().get("items", [])
-    travily_context = "\n".join(f"{i+1}. {it.get('title', '제목없음')} ({it.get('url')})" for i, it in enumerate(travily_items)) or "정보 없음"
-
-    # Naver News API
-    naver_url = "https://openapi.naver.com/v1/search/news.json"
-    naver_headers = {"X-Naver-Client-Id": naver_id, "X-Naver-Client-Secret": naver_secret}
-    naver_params = {"query": startup_name, "display": 5}
-    naver_res = requests.get(naver_url, params=naver_params, headers=naver_headers)
-    naver_items = naver_res.json().get("items", [])
-    naver_context = "\n".join(f"{i+1}. {it.get('title', '제목없음')} – {it.get('description', '')} ({it.get('originallink')})" for i, it in enumerate(naver_items)) or "정보 없음"
+    # Tavily & Naver 검색
+    tavily_context = search_tavily(startup_name, 5)
+    naver_context = search_naver_news(startup_name, 5)
 
     # LLM Prompt
-    prompt_template = (
-        "당신은 스타트업 '{startup_name}'의 제품/서비스를 다음 체크리스트 10문항에 따라 평가해야 합니다.\n\n"
-        "체크리스트:\n{items}\n\n"
-        "다음 Travily API 결과(최대 5개)를 참고하세요:\n{travily_context}\n"
-        "다음 Naver News API 결과(최대 5개)를 참고하세요:\n{naver_context}\n\n"
-        "평가 시 유의사항:\n"
-        "- 정보가 부족하거나 명확하지 않을 경우 '정보 부족으로 점수 유보' 대신 관용적으로 5점 내외를 부여할 수 있습니다.\n"
-        "- 부정적 근거가 명확하지 않다면 초기 스타트업 상황을 고려하여 가능성에 가중치를 두고 평가하세요.\n\n"
-        "점수 부여 기준:\n"
-        "- 매우 우수하거나 충분히 충족 → 9~10점\n"
-        "- 일부 충족되었거나 불완전 → 5~8점\n"
-        "- 거의 정보가 없거나 충족되지 않음 → 0~4점\n\n"
-        "각 문항별 점수(0~10)와 판단 근거를 작성하세요.\n"
-        "판단 근거 뒤에는 관련 URL을 괄호 안에 포함하세요. URL이 없을 경우 '정보 없음'으로 표기하세요.\n"
-        "마지막에 총점: 숫자 (숫자만 입력, 예: 75)를 작성하세요."
-    )
+    prompt_template = create_analysis_prompt_template(checklist)
     prompt = ChatPromptTemplate.from_template(prompt_template)
     response = (prompt | llm).invoke({
         "startup_name": startup_name,
         "items": items_formatted,
-        "travily_context": travily_context,
+        "tavily_context": tavily_context,
         "naver_context": naver_context
     })
 
     # 결과 파싱
     analysis = response.content
-    score = extract_total_score_from_analysis(analysis)
-    if score is None:
-        score = extract_checklist_scores(analysis, checklist)
+    score = get_analysis_score(analysis, checklist)
 
     state["상품_점수"] = score
     state["상품_분석_근거"] = analysis
+    print(state["상품_점수"])
+    print(state["상품_분석_근거"])
     return state
-
-# ✔ 공통 점수 파싱 유틸 함수
-def extract_total_score_from_analysis(analysis: str) -> int:
-    patterns = [
-        r"\*\*총점\*\*[:：]?\s*(\d{1,3})",
-        r"총점[:：]?\s*(\d{1,3})\s*(?:점|/100)?",
-        r"Score[:：]?\s*(\d{1,3})\s*(?:점|/100)?",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, analysis, re.IGNORECASE)
-        if match:
-            return int(match.group(1))
-    return None
-
-def extract_checklist_scores(analysis: str, checklist: List[str]) -> int:
-    clean_analysis = re.sub(r"총점[:：]?\s*\d{1,3}\s*(?:점|/100)?", "", analysis, flags=re.IGNORECASE)
-    total_score = 0
-    for i, item in enumerate(checklist, 1):
-        patterns = [
-            fr"{i}\.\s.*?(\d{{1,2}})\s*/\s*10",
-            fr"{i}\.\s.*?(\d{{1,2}})점",
-            fr"{i}\.\s.*?점수[:：]?\s*(\d{{1,2}})",
-            fr"{item}.*?(\d{{1,2}})\s*/\s*10",
-            fr"{item}.*?(\d{{1,2}})점",
-            fr"{item}.*?점수[:：]?\s*(\d{{1,2}})",
-        ]
-        found = False
-        for pattern in patterns:
-            match = re.search(pattern, clean_analysis, re.DOTALL | re.IGNORECASE)
-            if match:
-                item_score = int(match.group(1))
-                total_score += item_score
-                found = True
-                break
-    return min(100, max(0, total_score))
-
-# 정보 부족 항목 추출 (옵션)
-def extract_insufficient_items(text: str, checklist: List[str]) -> List[str]:
-    return [
-        item for item in checklist
-        if re.search(fr"{re.escape(item)}.*?0점", text) or "정보 없음" in text or "근거 부족" in text
-    ]
 
 def analyze_technology(state: "AgentState") -> "AgentState":
     startup_name = state.get("startup_name", "")
@@ -261,12 +191,13 @@ def analyze_technology(state: "AgentState") -> "AgentState":
         state["기술_분석_근거"] = "스타트업 이름이 제공되지 않았습니다."
         return state
 
-    travily_key = os.getenv("TAVILY_API_KEY")
-    naver_id = os.getenv("NAVER_CLIENT_ID")
-    naver_secret = os.getenv("NAVER_CLIENT_SECRET")
-    if not travily_key or not naver_id or not naver_secret:
+    try:
+        # API 키 검증
+        from utils import validate_api_keys
+        validate_api_keys(["tavily_key", "naver_id", "naver_secret"])
+    except ValueError as e:
         state["기술_점수"] = 0
-        state["기술_분석_근거"] = "API 키가 설정되지 않았습니다. .env 파일을 확인해주세요."
+        state["기술_분석_근거"] = str(e)
         return state
 
     checklist = [
@@ -274,49 +205,24 @@ def analyze_technology(state: "AgentState") -> "AgentState":
         "인력 역량", "기술 난이도", "기술 구현 가능성", "기술 유지보수 용이성",
         "기술 표준 준수 여부", "기술 관련 외부 인증 또는 수상 이력"
     ]
-    items_formatted = "\n".join(f"{i+1}. {q}" for i, q in enumerate(checklist))
+    items_formatted = format_checklist_items(checklist)
 
-    prompt_template = (
-        "당신은 스타트업 '{startup_name}'의 기술력을 다음 체크리스트 10문항에 따라 평가해야 합니다.\n\n"
-        "체크리스트:\n{items}\n\n"
-        "다음 Travily API 결과(최대 5개)를 참고하세요:\n{travily_context}\n"
-        "다음 Naver News API 결과(최대 5개)를 참고하세요:\n{naver_context}\n\n"
-        "평가 시 유의사항:\n"
-        "- 정보가 부족하거나 명확하지 않을 경우 '정보 부족으로 점수 유보' 대신 관용적으로 5점 내외를 부여할 수 있습니다.\n"
-        "- 부정적 근거가 명확하지 않다면 초기 스타트업 상황을 고려하여 가능성에 가중치를 두고 평가하세요.\n\n"
-        "점수 부여 기준:\n"
-        "- 매우 우수하거나 충분히 충족 → 9~10점\n"
-        "- 일부 충족되었거나 불완전 → 5~8점\n"
-        "- 거의 정보가 없거나 충족되지 않음 → 0~4점\n\n"
-        "각 문항별 점수(0~10)와 판단 근거를 작성하세요.\n"
-        "판단 근거 뒤에는 관련 URL을 괄호 안에 포함하세요. URL이 없을 경우 '정보 없음'으로 표기하세요.\n"
-        "마지막에 총점: 숫자 (숫자만 입력, 예: 75)를 작성하세요."
-    )
+    prompt_template = create_analysis_prompt_template(checklist)
     prompt = ChatPromptTemplate.from_template(prompt_template)
 
     analysis = ""
     for attempt in range(1, 4):
-        # Tavily
-        travily_url = "https://api.tavily.com/v1/search"
-        travily_params = {"query": startup_name, "limit": 5}
-        travily_headers = {"Authorization": f"Bearer {travily_key}"}
-        travily_res = requests.get(travily_url, params=travily_params, headers=travily_headers)
-        travily_items = travily_res.json().get("items", [])
-        travily_context = "\n".join([f"{i+1}. {it.get('title', '제목없음')} ({it.get('url')})" for i, it in enumerate(travily_items)]) or "정보 없음"
+        # Tavily & Naver 검색
+        tavily_context = search_tavily(startup_name, 5)
 
-        # Naver
-        naver_url = "https://openapi.naver.com/v1/search/news.json"
-        naver_headers = {"X-Naver-Client-Id": naver_id, "X-Naver-Client-Secret": naver_secret}
-        naver_params = {"query": startup_name, "display": 5}
-        naver_res = requests.get(naver_url, params=naver_params, headers=naver_headers)
-        naver_items = naver_res.json().get("items", [])
-        naver_context = "\n".join([f"{i+1}. {it.get('title', '제목없음')} – {it.get('description', '')} ({it.get('originallink')})" for i, it in enumerate(naver_items)]) or "정보 없음"
+        # Naver 검색
+        naver_context = search_naver_news(startup_name, 5)
 
         # LLM 호출
         response = (prompt | llm).invoke({
             "startup_name": startup_name,
             "items": items_formatted,
-            "travily_context": travily_context,
+            "tavily_context": tavily_context,
             "naver_context": naver_context
         })
         analysis = response.content
@@ -326,9 +232,7 @@ def analyze_technology(state: "AgentState") -> "AgentState":
             break
 
     # robust 점수 파싱
-    score = extract_total_score_from_analysis(analysis)
-    if score is None:
-        score = extract_checklist_scores(analysis, checklist)
+    score = get_analysis_score(analysis, checklist)
 
     state["기술_점수"] = score
     state["기술_분석_근거"] = analysis
@@ -341,12 +245,13 @@ def analyze_growth(state: "AgentState") -> "AgentState":
         state["성장률_분석_근거"] = "스타트업 이름이 제공되지 않았습니다."
         return state
 
-    travily_key = os.getenv("TAVILY_API_KEY")
-    naver_id = os.getenv("NAVER_CLIENT_ID")
-    naver_secret = os.getenv("NAVER_CLIENT_SECRET")
-    if not travily_key or not naver_id or not naver_secret:
+    try:
+        # API 키 검증
+        from utils import validate_api_keys
+        validate_api_keys(["tavily_key", "naver_id", "naver_secret"])
+    except ValueError as e:
         state["성장률_점수"] = 0
-        state["성장률_분석_근거"] = "API 키가 설정되지 않았습니다. .env 파일을 확인해주세요."
+        state["성장률_분석_근거"] = str(e)
         return state
 
     checklist = [
@@ -354,56 +259,41 @@ def analyze_growth(state: "AgentState") -> "AgentState":
         "월간/분기별 활성 사용자 증가 (MAU/WAU)", "신규 계약/클라이언트 수 증가", "연간 반복 매출(ARR) 성장",
         "투자 유치 규모 변화", "직원 수 증가율", "해외/신시장 진출 속도"
     ]
-    items_formatted = "\n".join(f"{i+1}. {q}" for i, q in enumerate(checklist))
+    items_formatted = format_checklist_items(checklist)
 
-    prompt_template = (
-        "당신은 스타트업 '{startup_name}'의 성장률을 다음 체크리스트 10문항에 따라 평가해야 합니다.\n\n"
-        "체크리스트:\n{items}\n\n"
-        "다음 Travily API 결과(최대 5개)를 참고하세요:\n{travily_context}\n"
-        "다음 Naver News API 결과(최대 5개)를 참고하세요:\n{naver_context}\n\n"
-        "평가 시 유의사항:\n"
-        "- 정보가 부족하거나 명확하지 않을 경우 '정보 부족으로 점수 유보' 대신 관용적으로 5점 내외를 부여할 수 있습니다.\n"
-        "- 부정적 근거가 명확하지 않다면 초기 스타트업 상황을 고려하여 가능성에 가중치를 두고 평가하세요.\n\n"
-        "점수 부여 기준:\n"
-        "- 매우 우수하거나 충분히 충족 → 9~10점\n"
-        "- 일부 충족되었거나 불완전 → 5~8점\n"
-        "- 거의 정보가 없거나 충족되지 않음 → 0~4점\n\n"
-        "각 문항별 점수(0~10)와 판단 근거를 작성하세요.\n"
-        "판단 근거 뒤에는 관련 URL을 괄호 안에 포함하세요. URL이 없을 경우 '정보 없음'으로 표기하세요.\n"
-        "마지막에 총점: 숫자 (숫자만 입력, 예: 75)를 작성하세요."
-    )
+    prompt_template = create_analysis_prompt_template(checklist)
     prompt = ChatPromptTemplate.from_template(prompt_template)
 
-    # LLM 호출 (재시도 제거, 1회 평가로 간소화 가능)
-    travily_url = "https://api.tavily.com/v1/search"
-    travily_params = {"query": startup_name, "limit": 5}
-    travily_headers = {"Authorization": f"Bearer {travily_key}"}
-    travily_res = requests.get(travily_url, params=travily_params, headers=travily_headers)
-    travily_items = travily_res.json().get("items", [])
-    travily_context = "\n".join([f"{i+1}. {it.get('title', '제목없음')} ({it.get('url')})" for i, it in enumerate(travily_items)]) or "정보 없음"
-
-    naver_url = "https://openapi.naver.com/v1/search/news.json"
-    naver_headers = {"X-Naver-Client-Id": naver_id, "X-Naver-Client-Secret": naver_secret}
-    naver_params = {"query": startup_name, "display": 5}
-    naver_res = requests.get(naver_url, params=naver_params, headers=naver_headers)
-    naver_items = naver_res.json().get("items", [])
-    naver_context = "\n".join([f"{i+1}. {it.get('title', '제목없음')} – {it.get('description', '')} ({it.get('originallink')})" for i, it in enumerate(naver_items)]) or "정보 없음"
+    # Tavily & Naver 검색
+    tavily_context = search_tavily(startup_name, 5)
+    naver_context = search_naver_news(startup_name, 5)
 
     response = (prompt | llm).invoke({
         "startup_name": startup_name,
         "items": items_formatted,
-        "travily_context": travily_context,
+        "tavily_context": tavily_context,
         "naver_context": naver_context
     })
     analysis = response.content
 
     # 점수 robust 파싱
-    score = extract_total_score_from_analysis(analysis)
-    if score is None:
-        score = extract_checklist_scores(analysis, checklist)
+    score = get_analysis_score(analysis, checklist)
 
     state["성장률_점수"] = score
     state["성장률_분석_근거"] = analysis
+    return state
+
+def internal_judgement(state: AgentState) -> AgentState:
+    if (
+        state["상품_점수"] < 40 or
+        state["기술_점수"] < 40 or
+        state["성장률_점수"] < 40
+    ):
+        state["최종_판단"] = "보류"
+    elif (
+        (state["상품_점수"] + state["기술_점수"] + state["성장률_점수"]) / 3 < 60
+    ):
+        state["최종_판단"] = "보류"
     return state
 
 def analyze_market(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -412,30 +302,38 @@ def analyze_market(state: Dict[str, Any]) -> Dict[str, Any]:
         state["시장성_점수"] = 0
         state["시장성_분석_근거"] = "스타트업 이름이 제공되지 않았습니다."
         return state
-
-    # ✅ PDF 폴더 내 전체 PDF 로드
+    pinecone_api_key = os.getenv("PINECONE_API_KEY")
+    pinecone_host = os.getenv("PINECONE_HOST")
+    pinecone_index = os.getenv("PINECONE_INDEX_NAME")
+    if not (pinecone_api_key and pinecone_host and pinecone_index):
+        raise ValueError("Pinecone API 키, 호스트, 인덱스명을 .env에 설정하세요.")
+    pc = Pinecone(api_key=pinecone_api_key, host=pinecone_host)
+    embeddings = OpenAIEmbeddings()
+    vector_store = PineconeVectorStore.from_existing_index(
+        pinecone_index, embeddings
+    )
+    vector_retriever = vector_store.as_retriever(search_kwargs={"k": 5})
+    # BM25 리트리버 (PDF 청크 필요)
     pdf_dir = os.path.join(os.getcwd(), "data")
     pdf_files = [f for f in os.listdir(pdf_dir) if f.lower().endswith(".pdf")]
-    print(f"\n[DEBUG] 폴더 내 PDF 파일 수: {len(pdf_files)}")
-
     all_docs = []
     for pdf_file in pdf_files:
         pdf_path = os.path.join(pdf_dir, pdf_file)
         loader = PyMuPDFLoader(pdf_path)
         split_docs = loader.load_and_split(RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100))
-        print(f"[DEBUG] '{pdf_file}' → {len(split_docs)} 청크 생성")
         all_docs.extend(split_docs)
-
-    vector_store = Chroma.from_documents(all_docs, OpenAIEmbeddings())
-    retriever = vector_store.as_retriever()
-
-    retrieved_docs = retriever.get_relevant_documents(f"{startup_name} 시장성, 시장 규모, 성장성, 수요 동향, 트렌드")
-    print(f"\n[DEBUG] RAG 검색 결과 - 총 {len(retrieved_docs)}개")
+    bm25_retriever = BM25Retriever.from_documents(all_docs)
+    bm25_retriever.k = 5
+    ensemble_retriever = EnsembleRetriever(
+        retrievers=[bm25_retriever, vector_retriever],
+        weights=[0.5, 0.5]
+    )
+    retrieved_docs = ensemble_retriever.get_relevant_documents(f"{startup_name} 시장성, 시장 규모, 성장성, 수요 동향, 트렌드")
+    print(f"\n[DEBUG] 하이브리드 RAG 검색 결과 - 총 {len(retrieved_docs)}개")
     for i, doc in enumerate(retrieved_docs):
-        print(f"\n[RAG 결과 {i+1}] (Page: {doc.metadata.get('page', '알 수 없음')})\n{doc.page_content[:300]}...")
-
+        print(f"\n[하이브리드 RAG 결과 {i+1}] (Page: {doc.metadata.get('page', '알 수 없음')})\n{doc.page_content[:300]}...")
     rag_context = "\n\n".join([f"(Page: {doc.metadata.get('page', '알 수 없음')})\n{doc.page_content}" for doc in retrieved_docs]) or "PDF에서 유의미한 정보 없음"
-
+    # Tavily, Web Search 등 이하 기존 코드 동일
     # ✅ Web Search part (Tavily)
     search_tool = TavilySearchResults(k=10)
     web_results = search_tool.invoke(f"{startup_name} AI 스타트업 시장성, 시장 규모, 성장성, 수요 동향, 트렌드 최근 6개월 기사")
@@ -470,7 +368,9 @@ def analyze_market(state: Dict[str, Any]) -> Dict[str, Any]:
         "- 총점: 점수 (숫자만 입력하세요, 예: 75)"
     )
 
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
     chain = prompt | llm
+
     response = chain.invoke({
         "startup_name": startup_name,
         "combined_context": combined_context,
@@ -479,10 +379,7 @@ def analyze_market(state: Dict[str, Any]) -> Dict[str, Any]:
     analysis = response.content
     print(f"\n[DEBUG] LLM 응답 (앞 1000자):\n{analysis[:1000]}...")
 
-    score = extract_total_score_from_analysis(analysis)
-    if score is None:
-        print(f"\n[DEBUG] 총점 파싱 실패 → 항목별 점수 직접 계산 시도")
-        score = extract_checklist_scores(analysis, checklist)
+    score = get_analysis_score(analysis, checklist)
 
     print(f"\n[DEBUG] 최종 총점: {score}")
     state["시장성_점수"] = score
@@ -558,12 +455,58 @@ def analyze_competitor(state: Dict[str, Any]) -> Dict[str, Any]:
     score = extract_total_score_from_analysis(analysis)
     if score is None:
         print("\n[DEBUG] 총점 파싱 실패 → extract_checklist_scores_competitor()에서 항목별 점수 직접 계산")
-        score = extract_checklist_scores(analysis, checklist)
+        score = extract_checklist_scores_competitor(analysis, checklist)
 
     state["경쟁사_점수"] = score
     state["경쟁사_분석_근거"] = analysis
     print(f"[DEBUG] 최종 총점: {score}")
     return state
+
+def extract_total_score_from_analysis(analysis: str) -> int:
+    """LLM 응답에서 다양한 총점 표현을 robust하게 파싱"""
+    patterns = [
+        r"\*\*총점\*\*[:：]?\s*(\d{1,3})",       # '**총점**: 69'
+        r"총점[:：]?\s*(\d{1,3})\s*(?:점|/100)?",  # '총점: 69', '총점: 69점'
+        r"Score[:：]?\s*(\d{1,3})\s*(?:점|/100)?",  # 'Score: 69', 'Score: 69/100'
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, analysis, re.IGNORECASE)
+        if match:
+            print(f"[DEBUG] 정규표현식으로 직접 파싱된 총점: {match.group(1)}")
+            return int(match.group(1))
+    return None
+
+def extract_checklist_scores(analysis: str, checklist: List[str]) -> int:
+    """체크리스트 항목별 점수를 유연하게 파싱 (다양한 표현 허용)"""
+    # ✅ 총점 제거
+    clean_analysis = re.sub(r"총점[:：]?\s*\d{1,3}\s*(?:점|/100)?", "", analysis, flags=re.IGNORECASE)
+
+    total_score = 0
+    print("\n[DEBUG] 체크리스트별 점수 파싱 시작:")
+    for i, item in enumerate(checklist, 1):
+        # 모든 항목 공통적으로 사용할 패턴 리스트 (가장 일반적 → 구체적 순서로)
+        patterns = [
+            fr"{i}\.\s.*?(\d{{1,2}})\s*/\s*10",  # '9/10'
+            fr"{i}\.\s.*?(\d{{1,2}})점",         # '9점'
+            fr"{i}\.\s.*?점수[:：]?\s*(\d{{1,2}})",  # '점수: 9'
+            fr"{item}.*?(\d{{1,2}})\s*/\s*10",
+            fr"{item}.*?(\d{{1,2}})점",
+            fr"{item}.*?점수[:：]?\s*(\d{{1,2}})",
+        ]
+        found = False
+        for pattern in patterns:
+            match = re.search(pattern, clean_analysis, re.DOTALL | re.IGNORECASE)
+            if match:
+                item_score = int(match.group(1))
+                print(f"- 항목 {i}: {item} → 점수: {item_score}")
+                total_score += item_score
+                found = True
+                break
+        if not found:
+            print(f"- 항목 {i}: {item} → 점수 찾지 못함 (0점 처리)")
+
+    print(f"[DEBUG] 체크리스트 총합 (정확한 합산): {total_score}")
+    return min(100, max(0, total_score))
 
 def final_judgement(state: AgentState) -> AgentState:
     avg_internal = (state["상품_점수"] + state["기술_점수"] + state["성장률_점수"]) / 3
