@@ -1,0 +1,396 @@
+openapi: 3.0.3
+info:
+  title: AI Startup Investment Evaluation API
+  description: |
+    AI 스타트업 투자 평가 시스템의 REST API 명세서
+    
+    ## 주요 기능
+    - 스타트업 투자 적합성 자동 평가
+    - 실시간 분석 진행상황 모니터링
+    - 평가 결과 및 PDF 보고서 제공
+    
+    ## 평가 항목
+    - 상품/서비스 경쟁력 (내부)
+    - 기술 수준 및 차별성 (내부)
+    - 성장 가능성 (내부)
+    - 시장성 (외부)
+    - 경쟁사 분석 (외부)
+    
+    ## 평가 프로세스
+    1. 내부 항목 평가 (상품, 기술, 성장성)
+    2. 내부 항목 기준 충족 시 외부 항목 평가 (시장성, 경쟁사)
+    3. 최종 투자 판단 (투자/보류)
+    4. PDF 보고서 생성
+  version: 1.0.0
+  contact:
+    name: AI Investment Evaluation Team
+    email: team@example.com
+
+servers:
+  - url: http://localhost:8000
+    description: Development server
+  - url: https://api.example.com
+    description: Production server
+
+paths:
+  /api/evaluate:
+    post:
+      summary: 스타트업 투자 평가 시작
+      description: |
+        스타트업 이름을 입력받아 투자 적합성 평가를 시작합니다.
+        평가는 비동기적으로 진행되며, task_id를 반환합니다.
+      tags:
+        - Evaluation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EvaluationRequest'
+            example:
+              startup_name: "업스테이지"
+      responses:
+        '200':
+          description: 평가 작업이 성공적으로 시작됨
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvaluationResponse'
+              example:
+                task_id: "task_1234567890"
+                message: "평가가 시작되었습니다."
+                status: "started"
+        '400':
+          description: 잘못된 요청
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: 서버 내부 오류
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/evaluate/{task_id}/status:
+    get:
+      summary: 평가 진행상황 조회
+      description: |
+        특정 평가 작업의 현재 진행상황을 조회합니다.
+        분석 단계별 진행률과 상태 정보를 제공합니다.
+      tags:
+        - Evaluation
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          description: 평가 작업 ID
+          schema:
+            type: string
+          example: "task_1234567890"
+      responses:
+        '200':
+          description: 평가 진행상황 조회 성공
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+              example:
+                task_id: "task_1234567890"
+                status: "in_progress"
+                progress: 60
+                current_step: "시장 분석"
+                description: "시장 환경을 분석하고 있습니다..."
+                estimated_time: "2분"
+        '404':
+          description: 작업을 찾을 수 없음
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/evaluate/{task_id}/result:
+    get:
+      summary: 평가 결과 조회
+      description: |
+        완료된 평가 작업의 최종 결과를 조회합니다.
+        각 항목별 점수와 최종 투자 판단을 제공합니다.
+      tags:
+        - Evaluation
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          description: 평가 작업 ID
+          schema:
+            type: string
+          example: "task_1234567890"
+      responses:
+        '200':
+          description: 평가 결과 조회 성공
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultResponse'
+              example:
+                task_id: "task_1234567890"
+                startup_name: "업스테이지"
+                status: "completed"
+                decision: "투자"
+                overall_score: 85
+                scores:
+                  product: 88
+                  technology: 82
+                  growth: 79
+                  market: 87
+                  competition: 78
+                analysis_details:
+                  product_analysis: "상품 경쟁력이 우수합니다..."
+                  technology_analysis: "기술 수준이 높습니다..."
+                  growth_analysis: "성장 가능성이 있습니다..."
+                  market_analysis: "시장성이 좋습니다..."
+                  competition_analysis: "경쟁 우위가 있습니다..."
+                created_at: "2024-07-22T10:30:00Z"
+        '404':
+          description: 작업을 찾을 수 없음
+        '409':
+          description: 평가가 아직 완료되지 않음
+
+  /api/evaluate/{task_id}/pdf:
+    get:
+      summary: PDF 보고서 다운로드
+      description: |
+        완료된 평가 작업의 PDF 보고서를 다운로드합니다.
+        파일은 application/pdf 형식으로 반환됩니다.
+      tags:
+        - Evaluation
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          description: 평가 작업 ID
+          schema:
+            type: string
+          example: "task_1234567890"
+      responses:
+        '200':
+          description: PDF 파일 다운로드 성공
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+          headers:
+            Content-Disposition:
+              description: 파일 다운로드 헤더
+              schema:
+                type: string
+                example: 'attachment; filename="업스테이지_투자분석보고서_20240722.pdf"'
+        '404':
+          description: 작업을 찾을 수 없음
+        '409':
+          description: PDF가 아직 생성되지 않음
+
+  /api/health:
+    get:
+      summary: 서버 상태 확인
+      description: API 서버의 상태를 확인합니다.
+      tags:
+        - System
+      responses:
+        '200':
+          description: 서버 정상 동작
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "healthy"
+                  timestamp:
+                    type: string
+                    format: date-time
+                    example: "2024-07-22T10:30:00Z"
+
+components:
+  schemas:
+    EvaluationRequest:
+      type: object
+      required:
+        - startup_name
+      properties:
+        startup_name:
+          type: string
+          description: 평가할 스타트업 이름
+          example: "업스테이지"
+          minLength: 1
+          maxLength: 100
+
+    EvaluationResponse:
+      type: object
+      properties:
+        task_id:
+          type: string
+          description: 평가 작업 ID
+          example: "task_1234567890"
+        message:
+          type: string
+          description: 응답 메시지
+          example: "평가가 시작되었습니다."
+        status:
+          type: string
+          enum: [started, failed]
+          description: 작업 시작 상태
+          example: "started"
+
+    StatusResponse:
+      type: object
+      properties:
+        task_id:
+          type: string
+          description: 평가 작업 ID
+          example: "task_1234567890"
+        status:
+          type: string
+          enum: [pending, in_progress, completed, failed]
+          description: 현재 작업 상태
+          example: "in_progress"
+        progress:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: 진행률 (0-100)
+          example: 60
+        current_step:
+          type: string
+          description: 현재 진행 중인 단계
+          example: "시장 분석"
+        description:
+          type: string
+          description: 현재 단계 설명
+          example: "시장 환경을 분석하고 있습니다..."
+        estimated_time:
+          type: string
+          description: 예상 완료 시간
+          example: "2분"
+        error_message:
+          type: string
+          description: 오류 발생 시 오류 메시지
+          example: "분석 중 오류가 발생했습니다."
+
+    ResultResponse:
+      type: object
+      properties:
+        task_id:
+          type: string
+          description: 평가 작업 ID
+          example: "task_1234567890"
+        startup_name:
+          type: string
+          description: 평가된 스타트업 이름
+          example: "업스테이지"
+        status:
+          type: string
+          enum: [completed, failed]
+          description: 평가 완료 상태
+          example: "completed"
+        decision:
+          type: string
+          enum: [투자, 보류]
+          description: 최종 투자 판단
+          example: "투자"
+        overall_score:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: 종합 점수
+          example: 85
+        scores:
+          type: object
+          description: 항목별 점수
+          properties:
+            product:
+              type: integer
+              minimum: 0
+              maximum: 100
+              description: 상품/서비스 점수
+              example: 88
+            technology:
+              type: integer
+              minimum: 0
+              maximum: 100
+              description: 기술 점수
+              example: 82
+            growth:
+              type: integer
+              minimum: 0
+              maximum: 100
+              description: 성장성 점수
+              example: 79
+            market:
+              type: integer
+              minimum: 0
+              maximum: 100
+              description: 시장성 점수
+              example: 87
+            competition:
+              type: integer
+              minimum: 0
+              maximum: 100
+              description: 경쟁사 점수
+              example: 78
+        analysis_details:
+          type: object
+          description: 항목별 상세 분석 내용
+          properties:
+            product_analysis:
+              type: string
+              description: 상품/서비스 분석 내용
+              example: "상품 경쟁력이 우수합니다..."
+            technology_analysis:
+              type: string
+              description: 기술 분석 내용
+              example: "기술 수준이 높습니다..."
+            growth_analysis:
+              type: string
+              description: 성장성 분석 내용
+              example: "성장 가능성이 있습니다..."
+            market_analysis:
+              type: string
+              description: 시장성 분석 내용
+              example: "시장성이 좋습니다..."
+            competition_analysis:
+              type: string
+              description: 경쟁사 분석 내용
+              example: "경쟁 우위가 있습니다..."
+        created_at:
+          type: string
+          format: date-time
+          description: 평가 완료 시간
+          example: "2024-07-22T10:30:00Z"
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          description: 오류 코드
+          example: "VALIDATION_ERROR"
+        message:
+          type: string
+          description: 오류 메시지
+          example: "스타트업 이름은 필수입니다."
+        details:
+          type: object
+          description: 상세 오류 정보
+          example:
+            field: "startup_name"
+            value: ""
+
+tags:
+  - name: Evaluation
+    description: 스타트업 투자 평가 관련 API
+  - name: System
+    description: 시스템 상태 확인 API 

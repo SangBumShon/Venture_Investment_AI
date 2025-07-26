@@ -38,33 +38,33 @@ def search_tavily(query: str, limit: int = 5) -> str:
             tavily_data = {"query": query, "limit": limit}
             tavily_headers = {"Authorization": f"Bearer {keys['tavily_key']}", "Content-Type": "application/json"}
             
-            print(f"Tavily API 요청 시도 {attempt + 1}/{max_retries}")
+            # print(f"Tavily API 요청 시도 {attempt + 1}/{max_retries}")
             tavily_res = requests.post(tavily_url, json=tavily_data, headers=tavily_headers, timeout=30)
             
             if tavily_res.status_code == 200:
                 response_data = tavily_res.json()
                 
-                # 디버깅용: 전체 JSON 구조 출력
-                print(f"\n🔧 [DEBUG] Tavily API 전체 응답 구조:")
-                print(f"응답 키들: {list(response_data.keys())}")
-                print(f"결과 개수: {len(response_data.get('results', []))}")
+                # 디버깅용: 전체 JSON 구조 출력 (주석처리)
+                # print(f"\n🔧 [DEBUG] Tavily API 전체 응답 구조:")
+                # print(f"응답 키들: {list(response_data.keys())}")
+                # print(f"결과 개수: {len(response_data.get('results', []))}")
                 
                 tavily_items = response_data.get("results", [])
                 
                 if tavily_items:
-                    # 디버깅용: Tavily 검색 결과 출력
-                    print(f"\n🔍 [DEBUG] Tavily 검색 결과 ({len(tavily_items)}개)")
-                    print("=" * 50)
-                    for i, item in enumerate(tavily_items, 1):
-                        print(f"{i}. {item.get('title', '제목없음')}")
-                        print(f"   📍 {item.get('url', 'URL 없음')}")
-                        if item.get('content'):
-                            content_preview = item.get('content', '')[:150].replace('\n', ' ').strip()
-                            print(f"   📄 {content_preview}...")
-                        
-                        # 디버깅용: 각 아이템의 JSON 키들 출력
-                        print(f"   🔧 JSON 키들: {list(item.keys())}")
-                        print()
+                    # 디버깅용: Tavily 검색 결과 출력 (주석처리)
+                    # print(f"\n🔍 [DEBUG] Tavily 검색 결과 ({len(tavily_items)}개)")
+                    # print("=" * 50)
+                    # for i, item in enumerate(tavily_items, 1):
+                    #     print(f"{i}. {item.get('title', '제목없음')}")
+                    #     print(f"   📍 {item.get('url', 'URL 없음')}")
+                    #     if item.get('content'):
+                    #         content_preview = item.get('content', '')[:150].replace('\n', ' ').strip()
+                    #         print(f"   📄 {content_preview}...")
+                    #     
+                    #     # 디버깅용: 각 아이템의 JSON 키들 출력
+                    #     # print(f"   🔧 JSON 키들: {list(item.keys())}")
+                    #     print()
                     
                     tavily_context = "\n".join(f"{i+1}. {it.get('title', '제목없음')} ({it.get('url', 'URL 없음')})" for i, it in enumerate(tavily_items))
                     return tavily_context or "정보 없음"
@@ -101,27 +101,28 @@ def search_naver_news(query: str, display: int = 5) -> str:
         naver_res.raise_for_status()
         naver_response_data = naver_res.json()
         
-        # 디버깅용: 전체 JSON 구조 출력
-        print(f"\n🔧 [DEBUG] Naver News API 전체 응답 구조:")
-        print(f"응답 키들: {list(naver_response_data.keys())}")
-        print(f"결과 개수: {len(naver_response_data.get('items', []))}")
+        # 디버깅용: 전체 JSON 구조 출력 (주석처리)
+        # print(f"\n🔧 [DEBUG] Naver News API 전체 응답 구조:")
+        # print(f"응답 키들: {list(naver_response_data.keys())}")
+        # print(f"결과 개수: {len(naver_response_data.get('items', []))}")
         
         naver_items = naver_response_data.get("items", [])
         
         if naver_items:
-            # 디버깅용: Naver News 검색 결과 출력
-            print(f"\n📰 [DEBUG] Naver News 검색 결과 ({len(naver_items)}개)")
-            print("=" * 50)
-            for i, item in enumerate(naver_items, 1):
-                print(f"{i}. {item.get('title', '제목없음')}")
-                print(f"   📍 {item.get('originallink', 'URL 없음')}")
-                if item.get('description'):
-                    desc_preview = item.get('description', '')[:150].replace('\n', ' ').strip()
-                    print(f"   📄 {desc_preview}...")
-                
-                # 디버깅용: 각 아이템의 JSON 키들 출력
-                print(f"   🔧 JSON 키들: {list(item.keys())}")
-                print()
+            # 디버깅용: Naver News 검색 결과 출력 (주석처리)
+            # print(f"\n📰 [DEBUG] Naver News 검색 결과 ({len(naver_items)}개)")
+            # print("=" * 50)
+            # for i, item in enumerate(naver_items, 1):
+            #     print(f"{i}. {item.get('title', '제목없음')}")
+            #     print(f"   📍 {item.get('originallink', 'URL 없음')}")
+            #     if item.get('description'):
+            #         desc_preview = item.get('description', '')[:150].replace('\n', ' ').strip()
+            #         print(f"   📄 {desc_preview}...")
+            #     
+            #     # 디버깅용: 각 아이템의 JSON 키들 출력
+            #     # print(f"   🔧 JSON 키들: {list(item.keys())}")
+            #     print()
+            pass
         
         naver_context = "\n".join(f"{i+1}. {it.get('title', '제목없음')} – {it.get('description', '')} ({it.get('originallink')})" for i, it in enumerate(naver_items))
         return naver_context or "정보 없음"
@@ -214,3 +215,54 @@ def create_analysis_prompt_template(checklist: List[str]) -> str:
 각 문항별 점수(0~10)와 판단 근거를 작성하세요.
 판단 근거 뒤에는 관련 URL을 괄호 안에 포함하세요. URL이 없을 경우 '정보 없음'으로 표기하세요.
 마지막에 총점: 숫자 (숫자만 입력, 예: 75)를 작성하세요.""" 
+
+def rerank_with_cross_encoder(query: str, docs: list, model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2", top_k: int = 5):
+    """
+    Cross-Encoder로 문서 리스트를 rerank하여 상위 top_k개 반환
+    docs: list of dicts, each with at least 'page_content' key
+    """
+    from sentence_transformers import CrossEncoder
+    if not docs:
+        return []
+    model = CrossEncoder(model_name)
+    pairs = [(query, doc["page_content"]) for doc in docs]
+    scores = model.predict(pairs)
+    reranked = sorted(zip(docs, scores), key=lambda x: x[1], reverse=True)
+    return [doc for doc, score in reranked[:top_k]] 
+
+def parse_llm_json_response(llm_output: str, default: dict = None) -> dict:
+    """
+    LLM 응답을 JsonOutputParser로 파싱하되, 실패 시 수동 파싱/예외처리/방어적 처리를 적용하는 함수
+    - 1차: JsonOutputParser로 파싱
+    - 2차: 정규표현식으로 JSON 부분 추출 후 파싱
+    - 3차: 실패 시 default 반환 (없으면 {'error': ...})
+    """
+    from langchain_core.output_parsers import JsonOutputParser
+    import json, re
+    parser = JsonOutputParser()
+    try:
+        return parser.parse(llm_output)
+    except Exception as e1:
+        print(f"[JsonOutputParser] 1차 파싱 실패: {e1}")
+        # 코드블록/설명 등 제거, JSON 부분만 추출
+        try:
+            # ```json ... ``` 또는 ``` ... ``` 제거
+            cleaned = llm_output.strip()
+            if cleaned.startswith("```json"):
+                cleaned = cleaned[7:]
+            if cleaned.startswith("```"):
+                cleaned = cleaned[3:]
+            if cleaned.endswith("```"):
+                cleaned = cleaned[:-3]
+            # 첫 번째 중괄호 블록 추출
+            match = re.search(r'\{[\s\S]*\}', cleaned)
+            if match:
+                json_str = match.group(0)
+                return json.loads(json_str)
+            else:
+                raise ValueError("No JSON object found in LLM output")
+        except Exception as e2:
+            print(f"[JsonOutputParser] 2차 수동 파싱 실패: {e2}")
+            if default is not None:
+                return default
+            return {"error": f"파싱 실패: {e1} / {e2}", "raw": llm_output} 
