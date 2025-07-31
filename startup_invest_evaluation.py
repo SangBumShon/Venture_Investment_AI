@@ -4,8 +4,8 @@
 from dotenv import load_dotenv
 load_dotenv()
 
-from langchain_teddynote import logging
-logging.langsmith("AI-project")
+# from langchain_teddynote import logging
+# logging.langsmith("AI-project")
 
 from typing import TypedDict, Literal, List, Dict, Any
 from langgraph.graph import StateGraph, END
@@ -33,26 +33,29 @@ from langchain.retrievers import EnsembleRetriever
 from langchain_pinecone import PineconeVectorStore
 from pinecone import Pinecone
 
-from ..utils.utils import (
-    search_tavily, search_naver_news, get_analysis_score, 
-    extract_insufficient_items, format_checklist_items, create_analysis_prompt_template,
-    rerank_with_cross_encoder, parse_llm_json_response
-)
-
 import markdown2
 import pdfkit
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
+# utils.py에서 필요한 함수들 import
+from utils import (
+    validate_api_keys,
+    search_tavily,
+    search_naver_news,
+    extract_total_score_from_analysis,
+    extract_checklist_scores,
+    extract_insufficient_items,
+    get_analysis_score,
+    format_checklist_items,
+    create_analysis_prompt_template
+)
+
 # PDF/마크다운 출력 함수 등 (간단 버전)
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+BASE_DIR = os.getcwd()
 WKHTMLTOPDF_BIN = os.path.join(BASE_DIR, "wkhtmltopdf", "bin", "wkhtmltopdf.exe")
 NANUM_REG_TTF   = os.path.join(BASE_DIR, "NanumGothic.ttf")
 NANUM_BOLD_TTF  = os.path.join(BASE_DIR, "NanumGothicBold.ttf")
-
-# 디버깅을 위한 경로 출력 (주석처리)
-# print(f"PDF 경로 확인: {WKHTMLTOPDF_BIN}")
-# print(f"폰트 경로 확인: {NANUM_REG_TTF}")
 NOTICE = "상품/서비스, 기술, 성장률 중에 하나라도 40점 미만이거나 평균 60점 미만이면 시장성과 경쟁사 항목은 측정되지 않습니다."
 
 def generate_markdown(state: dict, md_path: str) -> None:
@@ -144,24 +147,6 @@ class AgentState(TypedDict, total=False):
 # 2. LLM 초기화
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
-def extract_score_from_parsed(parsed) -> int:
-    """
-    LLM JSON 파싱 결과에서 점수 필드(총점, score, total 등)를 일관적으로 추출
-    parsed가 dict가 아니면 int/float로 변환 시도, 실패 시 0 반환
-    """
-    if isinstance(parsed, (int, float, str)):
-        try:
-            return int(float(parsed))
-        except Exception:
-            return 0
-    if isinstance(parsed, dict):
-        for key in ["총점", "score", "total", "점수"]:
-            if key in parsed and isinstance(parsed[key], (int, float, str)):
-                try:
-                    return int(float(parsed[key]))
-                except Exception:
-                    continue
-    return 0
 def analyze_product(state: AgentState) -> AgentState:
     startup_name = state.get("startup_name", "")
     if not startup_name:
@@ -171,7 +156,7 @@ def analyze_product(state: AgentState) -> AgentState:
 
     try:
         # API 키 검증
-        from ..utils.utils import validate_api_keys
+        from utils import validate_api_keys
         validate_api_keys(["tavily_key", "naver_id", "naver_secret"])
     except ValueError as e:
         state["상품_점수"] = 0
@@ -205,12 +190,15 @@ def analyze_product(state: AgentState) -> AgentState:
         "tavily_context": tavily_context,
         "naver_context": naver_context
     })
-    parsed = parse_llm_json_response(response.content)
-    score = extract_score_from_parsed(parsed)
+
+    # 결과 파싱
+    analysis = response.content
+    score = get_analysis_score(analysis, checklist)
+
     state["상품_점수"] = score
-    state["상품_분석_근거"] = response.content
-    # print(state["상품_점수"])
-    # print(state["상품_분석_근거"])
+    state["상품_분석_근거"] = analysis
+    print(f"\n[DEBUG] 상품/서비스 분석 완료 - 점수: {score}")
+    print(f"[DEBUG] 판단 근거 (앞 500자): {analysis[:500]}...")
     return state
 
 def analyze_technology(state: "AgentState") -> "AgentState":
@@ -222,7 +210,7 @@ def analyze_technology(state: "AgentState") -> "AgentState":
 
     try:
         # API 키 검증
-        from ..utils.utils import validate_api_keys
+        from utils import validate_api_keys
         validate_api_keys(["tavily_key", "naver_id", "naver_secret"])
     except ValueError as e:
         state["기술_점수"] = 0
@@ -239,24 +227,34 @@ def analyze_technology(state: "AgentState") -> "AgentState":
     prompt_template = create_analysis_prompt_template(checklist)
     prompt = ChatPromptTemplate.from_template(prompt_template)
 
-    # Tavily & Naver 검색
-    tavily_context = search_tavily(startup_name, 5)
-    naver_context = search_naver_news(startup_name, 5)
+    analysis = ""
+    for attempt in range(1, 4):
+        # Tavily & Naver 검색
+        tavily_context = search_tavily(startup_name, 5)
 
-    # LLM 호출 (1번만)
-    response = (prompt | llm).invoke({
-        "startup_name": startup_name,
-        "items": items_formatted,
-        "tavily_context": tavily_context,
-        "naver_context": naver_context
-    })
-    analysis = response.content
-    parsed = parse_llm_json_response(analysis)
-    score = extract_score_from_parsed(parsed)
+        # Naver 검색
+        naver_context = search_naver_news(startup_name, 5)
+
+        # LLM 호출
+        response = (prompt | llm).invoke({
+            "startup_name": startup_name,
+            "items": items_formatted,
+            "tavily_context": tavily_context,
+            "naver_context": naver_context
+        })
+        analysis = response.content
+
+        insufficient = extract_insufficient_items(analysis, checklist)
+        if len(insufficient) < 5 or attempt == 3:
+            break
+
+    # robust 점수 파싱
+    score = get_analysis_score(analysis, checklist)
+
     state["기술_점수"] = score
     state["기술_분석_근거"] = analysis
-    # print(state["기술_점수"])
-    # print(state["기술_분석_근거"])
+    print(f"\n[DEBUG] 기술 분석 완료 - 점수: {score}")
+    print(f"[DEBUG] 판단 근거 (앞 500자): {analysis[:500]}...")
     return state
 
 def analyze_growth(state: "AgentState") -> "AgentState":
@@ -268,7 +266,7 @@ def analyze_growth(state: "AgentState") -> "AgentState":
 
     try:
         # API 키 검증
-        from ..utils.utils import validate_api_keys
+        from utils import validate_api_keys
         validate_api_keys(["tavily_key", "naver_id", "naver_secret"])
     except ValueError as e:
         state["성장률_점수"] = 0
@@ -296,12 +294,14 @@ def analyze_growth(state: "AgentState") -> "AgentState":
         "naver_context": naver_context
     })
     analysis = response.content
-    parsed = parse_llm_json_response(analysis)
-    score = extract_score_from_parsed(parsed)
+
+    # 점수 robust 파싱
+    score = get_analysis_score(analysis, checklist)
+
     state["성장률_점수"] = score
     state["성장률_분석_근거"] = analysis
-    # print(state["성장률_점수"])
-    # print(state["성장률_분석_근거"])
+    print(f"\n[DEBUG] 성장률 분석 완료 - 점수: {score}")
+    print(f"[DEBUG] 판단 근거 (앞 500자): {analysis[:500]}...")
     return state
 
 def internal_judgement(state: AgentState) -> AgentState:
@@ -350,20 +350,10 @@ def analyze_market(state: Dict[str, Any]) -> Dict[str, Any]:
         weights=[0.5, 0.5]
     )
     retrieved_docs = ensemble_retriever.get_relevant_documents(f"{startup_name} 시장성, 시장 규모, 성장성, 수요 동향, 트렌드")
-    # print(f"\n[DEBUG] 하이브리드 RAG 검색 결과 - 총 {len(retrieved_docs)}개")
-    # for i, doc in enumerate(retrieved_docs):
-    #     print(f"\n[하이브리드 RAG 결과 {i+1}] (Page: {doc.metadata.get('page', '알 수 없음')})\n{doc.page_content[:300]}...")
-
-    # Cross-Encoder rerank 적용
-    from ..utils.utils import rerank_with_cross_encoder
-    reranked_docs = rerank_with_cross_encoder(
-        f"{startup_name} 시장성, 시장 규모, 성장성, 수요 동향, 트렌드",
-        retrieved_docs,
-        model_name="cross-encoder/ms-marco-MiniLM-L-6-v2",
-        top_k=5
-    )
-
-    rag_context = "\n\n".join([f"(Page: {doc.metadata.get('page', '알 수 없음')})\n{doc.page_content}" for doc in reranked_docs]) or "PDF에서 유의미한 정보 없음"
+    print(f"\n[DEBUG] 하이브리드 RAG 검색 결과 - 총 {len(retrieved_docs)}개")
+    for i, doc in enumerate(retrieved_docs[:3]):  # 상위 3개만 출력
+        print(f"\n[하이브리드 RAG 결과 {i+1}] (Page: {doc.metadata.get('page', '알 수 없음')})\n{doc.page_content[:300]}...")
+    rag_context = "\n\n".join([f"(Page: {doc.metadata.get('page', '알 수 없음')})\n{doc.page_content}" for doc in retrieved_docs]) or "PDF에서 유의미한 정보 없음"
     # Tavily, Web Search 등 이하 기존 코드 동일
     # ✅ Web Search part (Tavily)
     search_tool = TavilySearchResults(k=10)
@@ -388,28 +378,16 @@ def analyze_market(state: Dict[str, Any]) -> Dict[str, Any]:
     ]
 
     prompt = ChatPromptTemplate.from_template(
-        '''당신은 AI 스타트업 시장성 평가 전문가입니다. '{startup_name}'의 시장성을 종합적으로 평가해 주세요.
-
-다음 정보를 종합하여 분석하세요:
-{combined_context}
-
-체크리스트:
-1. 시장 규모 및 성장성
-2. 산업 내 수요 트렌드
-3. 고객군 다양성 및 확보 가능성
-4. 시장 진입 가능성 (규제, 장벽 등)
-5. 시장 내 대체재/경쟁 제품 존재 여부
-6. 향후 3~5년 성장 전망
-7. 국내외 시장 확장 가능성
-8. 산업 내 파트너쉽 및 생태계 가능성
-9. 사회적/경제적 메가트렌드 부합 여부
-10. 기술 변화에 따른 시장 위험성
-
-각 항목은 0점에서 10점 사이로 자유롭게 점수를 부여하세요.
-응답 형식:
-- 각 항목별 점수(0~10)와 **출처 포함한 분석 근거 (출처는 기사 제목, URL 또는 PDF 페이지 번호 명시)**
-- 결론 및 종합 분석
-- 총점: 점수 (숫자만 입력하세요, 예: 75)''')
+        "당신은 AI 스타트업 시장성 평가 전문가입니다. '{startup_name}'의 시장성을 종합적으로 평가해 주세요.\n\n"
+        "다음 정보를 종합하여 분석하세요:\n{combined_context}\n\n"
+        "체크리스트:\n" +
+        "\n".join([f"{i+1}. {q}" for i, q in enumerate(checklist)]) + "\n\n"
+        "각 항목은 0점에서 10점 사이로 자유롭게 점수를 부여하세요.\n"
+        "응답 형식:\n"
+        "- 각 항목별 점수(0~10)와 **출처 포함한 분석 근거 (출처는 기사 제목, URL 또는 PDF 페이지 번호 명시)**\n"
+        "- 결론 및 종합 분석\n"
+        "- 총점: 점수 (숫자만 입력하세요, 예: 75)"
+    )
 
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
     chain = prompt | llm
@@ -418,12 +396,17 @@ def analyze_market(state: Dict[str, Any]) -> Dict[str, Any]:
         "startup_name": startup_name,
         "combined_context": combined_context,
     })
+
     analysis = response.content
-    parsed = parse_llm_json_response(analysis)
-    score = extract_score_from_parsed(parsed)
+    # print(f"\n[DEBUG] LLM 응답 (앞 1000자):\n{analysis[:1000]}...")
+
+    score = get_analysis_score(analysis, checklist)
+
     # print(f"\n[DEBUG] 최종 총점: {score}")
     state["시장성_점수"] = score
     state["시장성_분석_근거"] = analysis
+    print(f"\n[DEBUG] 시장성 분석 완료 - 점수: {score}")
+    print(f"[DEBUG] 판단 근거 (앞 500자): {analysis[:500]}...")
     return state
 
 def analyze_competitor(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -431,7 +414,7 @@ def analyze_competitor(state: Dict[str, Any]) -> Dict[str, Any]:
     if not startup_name:
         state["경쟁사_점수"] = 0
         state["경쟁사_분석_근거"] = "스타트업 이름이 제공되지 않았습니다."
-        # print("[DEBUG] 스타트업 이름 없음")
+        print("[DEBUG] 스타트업 이름 없음")
         return state
 
     search_tool = TavilySearchResults(k=20)
@@ -441,8 +424,8 @@ def analyze_competitor(state: Dict[str, Any]) -> Dict[str, Any]:
     # for idx, result in enumerate(search_results, 1):
     #     print(f"{idx}. {result['title']}")
 
-    # if len(search_results) < 10:
-    #     print("[경고] 검색된 기사 수가 10개 미만입니다. 정보 부족으로 분석 신뢰도가 낮을 수 있습니다.")
+    if len(search_results) < 10:
+        print("[경고] 검색된 기사 수가 10개 미만입니다. 정보 부족으로 분석 신뢰도가 낮을 수 있습니다.")
 
     checklist = [
         "시장 진입 장벽 분석",
@@ -458,82 +441,141 @@ def analyze_competitor(state: Dict[str, Any]) -> Dict[str, Any]:
     ]
 
     prompt = ChatPromptTemplate.from_template(
-        '''당신은 AI 스타트업 경쟁 분석 전문가입니다. '{startup_name}'의 경쟁사 환경을 종합적으로 평가해 주세요.
-
-최근 6개월 이내에 발행된 20개 이상의 기사를 기반으로, 다음 체크리스트의 각 항목을 평가하세요.
-각 항목은 0점에서 10점 사이로 자유롭게 점수를 부여할 수 있습니다. 점수 부여 기준:
-- 매우 우수하거나 충분히 충족 → 9~10점
-- 일부 충족되었거나 불완전 → 5~8점
-- 거의 정보가 없거나 충족되지 않음 → 0~4점
-
-웹 검색 결과:
-{search_results}
-
-체크리스트:
-1. 시장 진입 장벽 분석
-2. 주요 경쟁사 식별
-3. 경쟁사 제품/서비스 차별점
-4. 시장 점유율 데이터
-5. 가격 전략 비교
-6. 기술적 우위 분석
-7. 타겟 고객층 중복도
-8. 성장 속도 및 추세
-9. 투자 유치 상황
-10. 경쟁사 대응 전략 가능성
-
-응답 형식:
-- 각 항목별 점수(0~10)와 **출처 포함한 분석 근거 (출처는 기사 제목 또는 URL 명시)**
-- 결론 및 종합 분석
-- 총점: 점수 (숫자만 입력하세요, 예: 75)''')
+        "당신은 AI 스타트업 경쟁 분석 전문가입니다. '{startup_name}'의 경쟁사 환경을 종합적으로 평가해 주세요.\n\n"
+        "최근 6개월 이내에 발행된 20개 이상의 기사를 기반으로, 다음 체크리스트의 각 항목을 평가하세요.\n"
+        "각 항목은 0점에서 10점 사이로 자유롭게 점수를 부여할 수 있습니다. 점수 부여 기준:\n"
+        "- 매우 우수하거나 충분히 충족 → 9~10점\n"
+        "- 일부 충족되었거나 불완전 → 5~8점\n"
+        "- 거의 정보가 없거나 충족되지 않음 → 0~4점\n\n"
+        "웹 검색 결과:\n{search_results}\n\n"
+        "체크리스트:\n"
+        "1. 시장 진입 장벽 분석\n"
+        "2. 주요 경쟁사 식별\n"
+        "3. 경쟁사 제품/서비스 차별점\n"
+        "4. 시장 점유율 데이터\n"
+        "5. 가격 전략 비교\n"
+        "6. 기술적 우위 분석\n"
+        "7. 타겟 고객층 중복도\n"
+        "8. 성장 속도 및 추세\n"
+        "9. 투자 유치 상황\n"
+        "10. 경쟁사 대응 전략 가능성\n\n"
+        "응답 형식:\n"
+        "- 각 항목별 점수(0~10)와 **출처 포함한 분석 근거 (출처는 기사 제목 또는 URL 명시)**\n"
+        "- 결론 및 종합 분석\n"
+        "- 총점: 점수 (숫자만 입력하세요, 예: 75)"
+    )
 
     chain = prompt | llm
     response = chain.invoke({
         "startup_name": startup_name,
         "search_results": search_results
     })
+
     analysis = response.content
-    parsed = parse_llm_json_response(analysis)
-    score = extract_score_from_parsed(parsed)
+    # print("\n[DEBUG] LLM 응답 내용:")
+    # print(analysis)
+
+    score = extract_total_score_from_analysis(analysis)
+    if score is None:
+        # print("\n[DEBUG] 총점 파싱 실패 → extract_checklist_scores_competitor()에서 항목별 점수 직접 계산")
+        score = extract_checklist_scores_competitor(analysis, checklist)
+
     state["경쟁사_점수"] = score
     state["경쟁사_분석_근거"] = analysis
-    # print(f"[DEBUG] 최종 총점: {score}")
+    print(f"\n[DEBUG] 경쟁사 분석 완료 - 점수: {score}")
+    print(f"[DEBUG] 판단 근거 (앞 500자): {analysis[:500]}...")
     return state
+
+def extract_total_score_from_analysis(analysis: str) -> int:
+    """LLM 응답에서 다양한 총점 표현을 robust하게 파싱"""
+    patterns = [
+        r"\*\*총점\*\*[:：]?\s*(\d{1,3})",       # '**총점**: 69'
+        r"총점[:：]?\s*(\d{1,3})\s*(?:점|/100)?",  # '총점: 69', '총점: 69점'
+        r"Score[:：]?\s*(\d{1,3})\s*(?:점|/100)?",  # 'Score: 69', 'Score: 69/100'
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, analysis, re.IGNORECASE)
+        if match:
+            # print(f"[DEBUG] 정규표현식으로 직접 파싱된 총점: {match.group(1)}")
+            return int(match.group(1))
+    return None
+
+def extract_checklist_scores_competitor(analysis: str, checklist: List[str]) -> int:
+    """경쟁사 분석용 체크리스트 항목별 점수를 유연하게 파싱 (다양한 표현 허용)"""
+    # ✅ 총점 제거
+    clean_analysis = re.sub(r"총점[:：]?\s*\d{1,3}\s*(?:점|/100)?", "", analysis, flags=re.IGNORECASE)
+
+    total_score = 0
+    # print("\n[DEBUG] 체크리스트별 점수 파싱 시작:")
+    for i, item in enumerate(checklist, 1):
+        # 모든 항목 공통적으로 사용할 패턴 리스트 (가장 일반적 → 구체적 순서로)
+        patterns = [
+            fr"{i}\.\s.*?(\d{{1,2}})\s*/\s*10",  # '9/10'
+            fr"{i}\.\s.*?(\d{{1,2}})점",         # '9점'
+            fr"{i}\.\s.*?점수[:：]?\s*(\d{{1,2}})",  # '점수: 9'
+            fr"{item}.*?(\d{{1,2}})\s*/\s*10",
+            fr"{item}.*?(\d{{1,2}})점",
+            fr"{item}.*?점수[:：]?\s*(\d{{1,2}})",
+        ]
+        found = False
+        for pattern in patterns:
+            match = re.search(pattern, clean_analysis, re.DOTALL | re.IGNORECASE)
+            if match:
+                item_score = int(match.group(1))
+                # print(f"- 항목 {i}: {item} → 점수: {item_score}")
+                total_score += item_score
+                found = True
+                break
+        if not found:
+            # print(f"- 항목 {i}: {item} → 점수 찾지 못함 (0점 처리)")
+            pass
+
+    # print(f"[DEBUG] 체크리스트 총합 (정확한 합산): {total_score}")
+    return min(100, max(0, total_score))
 
 def final_judgement(state: AgentState) -> AgentState:
     avg_internal = (state["상품_점수"] + state["기술_점수"] + state["성장률_점수"]) / 3
-    avg_total = (avg_internal + state.get("시장성_점수", 0) + state.get("경쟁사_점수",0)) / 3
+    
+    # 시장성과 경쟁사 점수가 있는 경우에만 포함
+    if "시장성_점수" in state and "경쟁사_점수" in state:
+        avg_total = (avg_internal + state["시장성_점수"] + state["경쟁사_점수"]) / 3
+    else:
+        avg_total = avg_internal
+    
     state["최종_판단"] = "투자" if avg_total >= 65 else "보류"
+    
+    print(f"\n[DEBUG] 최종 판단 완료:")
+    print(f"  - 상품/서비스: {state.get('상품_점수', 0)}")
+    print(f"  - 기술: {state.get('기술_점수', 0)}")
+    print(f"  - 성장률: {state.get('성장률_점수', 0)}")
+    if "시장성_점수" in state:
+        print(f"  - 시장성: {state['시장성_점수']}")
+    if "경쟁사_점수" in state:
+        print(f"  - 경쟁사: {state['경쟁사_점수']}")
+    print(f"  - 평균: {avg_total:.1f}")
+    print(f"  - 최종 판단: {state['최종_판단']}")
+    
     return state
 
 def generate_report(state: AgentState) -> AgentState:
     startup_name = state.get("startup_name", "알 수 없는 스타트업")
 
     prompt = ChatPromptTemplate.from_template(
-        '''스타트업 '{startup_name}'에 대한 투자 심사 결과는 {최종_판단} 입니다. 점수 요약:
-        - 상품/서비스: {상품_점수}
-        - 기술: {기술_점수}
-        - 성장률: {성장률_점수}
-        - 시장성: {시장성_점수}
-        - 경쟁사: {경쟁사_점수}
-
-        각 항목별 분석 근거:
-        1. 상품/서비스 분석:
-        {상품_분석_근거}
-
-        2. 기술 분석:
-        {기술_분석_근거}
-
-        3. 성장률 분석:
-        {성장률_분석_근거}
-
-        4. 시장성 분석:
-        {시장성_분석_근거}
-
-        5. 경쟁사 분석:
-        {경쟁사_분석_근거}
-
-        위 분석 결과를 바탕으로 투자 심사 보고서를 작성하세요. 각 항목별 강점과 약점을 요약하고, 최종 판단의 근거를 명확히 제시하며, 개선이 필요한 부분에 대한 제안도 포함해주세요.''')
-
+        "스타트업 '{startup_name}'에 대한 투자 심사 결과는 {최종_판단} 입니다. 점수 요약:\n"
+        "- 상품/서비스: {상품_점수}\n"
+        "- 기술: {기술_점수}\n"
+        "- 성장률: {성장률_점수}\n"
+        "- 시장성: {시장성_점수}\n"
+        "- 경쟁사: {경쟁사_점수}\n\n"
+        "각 항목별 분석 근거:\n"
+        "1. 상품/서비스 분석:\n{상품_분석_근거}\n\n"
+        "2. 기술 분석:\n{기술_분석_근거}\n\n"
+        "3. 성장률 분석:\n{성장률_분석_근거}\n\n"
+        "4. 시장성 분석:\n{시장성_분석_근거}\n\n"
+        "5. 경쟁사 분석:\n{경쟁사_분석_근거}\n\n"
+        "위 분석 결과를 바탕으로 투자 심사 보고서를 작성하세요. 각 항목별 강점과 약점을 요약하고, "
+        "최종 판단의 근거를 명확히 제시하며, 개선이 필요한 부분에 대한 제안도 포함해주세요."
+    )
     chain = prompt | llm
     report = chain.invoke({
         "startup_name": startup_name,
@@ -579,10 +621,20 @@ if __name__ == "__main__":
     graph.add_edge("GenerateReport", "GeneratePDF")
     graph.add_edge("GeneratePDF", END)
     compiled_graph = graph.compile()
-    # 사용자 입력으로 분석할 스타트업 이름 받기
-    startup_name = input("분석할 AI 스타트업 이름을 입력하세요: ").strip()
+    
+    # 사용자로부터 스타트업 이름 입력받기
+    startup_name = input("분석할 스타트업 이름을 입력하세요: ").strip()
+    if not startup_name:
+        print("스타트업 이름이 입력되지 않았습니다. 프로그램을 종료합니다.")
+        exit()
+    
+    print(f"\n'{startup_name}' 스타트업에 대한 투자 분석을 시작합니다...")
+    print("=" * 50)
+    
     initial_state = {"startup_name": startup_name}
     result = compiled_graph.invoke(initial_state)
-    # print(f"보고서 생성 완료: {result['pdf_path']}")
-    # print("\n--- 보고서 내용 미리보기 ---\n")
-    # print(result["보고서"][:500] + "...")
+    
+    print("\n" + "=" * 50)
+    print(f"분석 완료! 보고서가 생성되었습니다: {result['pdf_path']}")
+    print("\n--- 보고서 내용 미리보기 ---\n")
+    print(result["보고서"][:500] + "...")
