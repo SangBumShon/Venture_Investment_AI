@@ -38,33 +38,33 @@ def search_tavily(query: str, limit: int = 5) -> str:
             tavily_data = {"query": query, "limit": limit}
             tavily_headers = {"Authorization": f"Bearer {keys['tavily_key']}", "Content-Type": "application/json"}
             
-            print(f"Tavily API 요청 시도 {attempt + 1}/{max_retries}")
+            # print(f"Tavily API 요청 시도 {attempt + 1}/{max_retries}")
             tavily_res = requests.post(tavily_url, json=tavily_data, headers=tavily_headers, timeout=30)
             
             if tavily_res.status_code == 200:
                 response_data = tavily_res.json()
                 
                 # 디버깅용: 전체 JSON 구조 출력
-                print(f"\n🔧 [DEBUG] Tavily API 전체 응답 구조:")
-                print(f"응답 키들: {list(response_data.keys())}")
-                print(f"결과 개수: {len(response_data.get('results', []))}")
+                # print(f"\n🔧 [DEBUG] Tavily API 전체 응답 구조:")
+                # print(f"응답 키들: {list(response_data.keys())}")
+                # print(f"결과 개수: {len(response_data.get('results', []))}")
                 
                 tavily_items = response_data.get("results", [])
                 
                 if tavily_items:
                     # 디버깅용: Tavily 검색 결과 출력
-                    print(f"\n🔍 [DEBUG] Tavily 검색 결과 ({len(tavily_items)}개)")
-                    print("=" * 50)
-                    for i, item in enumerate(tavily_items, 1):
-                        print(f"{i}. {item.get('title', '제목없음')}")
-                        print(f"   📍 {item.get('url', 'URL 없음')}")
-                        if item.get('content'):
-                            content_preview = item.get('content', '')[:150].replace('\n', ' ').strip()
-                            print(f"   📄 {content_preview}...")
-                        
-                        # 디버깅용: 각 아이템의 JSON 키들 출력
-                        print(f"   🔧 JSON 키들: {list(item.keys())}")
-                        print()
+                    # print(f"\n🔍 [DEBUG] Tavily 검색 결과 ({len(tavily_items)}개)")
+                    # print("=" * 50)
+                    # for i, item in enumerate(tavily_items, 1):
+                    #     print(f"{i}. {item.get('title', '제목없음')}")
+                    #     print(f"   📍 {item.get('url', 'URL 없음')}")
+                    #     if item.get('content'):
+                    #         content_preview = item.get('content', '')[:150].replace('\n', ' ').strip()
+                    #         print(f"   📄 {content_preview}...")
+                    #     
+                    #     # 디버깅용: 각 아이템의 JSON 키들 출력
+                    #     print(f"   🔧 JSON 키들: {list(item.keys())}")
+                    #     print()
                     
                     tavily_context = "\n".join(f"{i+1}. {it.get('title', '제목없음')} ({it.get('url', 'URL 없음')})" for i, it in enumerate(tavily_items))
                     return tavily_context or "정보 없음"
@@ -72,19 +72,19 @@ def search_tavily(query: str, limit: int = 5) -> str:
                 print(f"Tavily API 오류: {tavily_res.status_code} - {tavily_res.text}")
                 
         except requests.exceptions.Timeout:
-            print(f"Tavily API 타임아웃 (시도 {attempt + 1}/{max_retries})")
+            # print(f"Tavily API 타임아웃 (시도 {attempt + 1}/{max_retries})")
             if attempt < max_retries - 1:
                 import time
                 time.sleep(2)  # 2초 대기 후 재시도
                 continue
         except Exception as e:
-            print(f"Tavily API 요청 오류 (시도 {attempt + 1}/{max_retries}): {e}")
+            # print(f"Tavily API 요청 오류 (시도 {attempt + 1}/{max_retries}): {e}")
             if attempt < max_retries - 1:
                 import time
                 time.sleep(2)  # 2초 대기 후 재시도
                 continue
     
-    print("모든 Tavily API 재시도 실패")
+    # print("모든 Tavily API 재시도 실패")
     
     return "정보 없음"
 
@@ -102,26 +102,27 @@ def search_naver_news(query: str, display: int = 5) -> str:
         naver_response_data = naver_res.json()
         
         # 디버깅용: 전체 JSON 구조 출력
-        print(f"\n🔧 [DEBUG] Naver News API 전체 응답 구조:")
-        print(f"응답 키들: {list(naver_response_data.keys())}")
-        print(f"결과 개수: {len(naver_response_data.get('items', []))}")
+        # print(f"\n🔧 [DEBUG] Naver News API 전체 응답 구조:")
+        # print(f"응답 키들: {list(naver_response_data.keys())}")
+        # print(f"결과 개수: {len(naver_response_data.get('items', []))}")
         
         naver_items = naver_response_data.get("items", [])
         
         if naver_items:
             # 디버깅용: Naver News 검색 결과 출력
-            print(f"\n📰 [DEBUG] Naver News 검색 결과 ({len(naver_items)}개)")
-            print("=" * 50)
-            for i, item in enumerate(naver_items, 1):
-                print(f"{i}. {item.get('title', '제목없음')}")
-                print(f"   📍 {item.get('originallink', 'URL 없음')}")
-                if item.get('description'):
-                    desc_preview = item.get('description', '')[:150].replace('\n', ' ').strip()
-                    print(f"   📄 {desc_preview}...")
-                
-                # 디버깅용: 각 아이템의 JSON 키들 출력
-                print(f"   🔧 JSON 키들: {list(item.keys())}")
-                print()
+            # print(f"\n📰 [DEBUG] Naver News 검색 결과 ({len(naver_items)}개)")
+            # print("=" * 50)
+            # for i, item in enumerate(naver_items, 1):
+            #     print(f"{i}. {item.get('title', '제목없음')}")
+            #     print(f"   📍 {item.get('originallink', 'URL 없음')}")
+            #     if item.get('description'):
+            #         desc_preview = item.get('description', '')[:150].replace('\n', ' ').strip()
+            #         print(f"   📄 {desc_preview}...")
+            #     
+            #     # 디버깅용: 각 아이템의 JSON 키들 출력
+            #     print(f"   🔧 JSON 키들: {list(item.keys())}")
+            #     print()
+            pass
         
         naver_context = "\n".join(f"{i+1}. {it.get('title', '제목없음')} – {it.get('description', '')} ({it.get('originallink')})" for i, it in enumerate(naver_items))
         return naver_context or "정보 없음"

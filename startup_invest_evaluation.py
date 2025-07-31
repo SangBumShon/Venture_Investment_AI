@@ -4,8 +4,8 @@
 from dotenv import load_dotenv
 load_dotenv()
 
-from langchain_teddynote import logging
-logging.langsmith("AI-project")
+# from langchain_teddynote import logging
+# logging.langsmith("AI-project")
 
 from typing import TypedDict, Literal, List, Dict, Any
 from langgraph.graph import StateGraph, END
@@ -28,11 +28,28 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
 from langchain_chroma import Chroma
 from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_community.retrievers import BM25Retriever
+from langchain.retrievers import EnsembleRetriever
+from langchain_pinecone import PineconeVectorStore
+from pinecone import Pinecone
 
 import markdown2
 import pdfkit
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
+
+# utils.py에서 필요한 함수들 import
+from utils import (
+    validate_api_keys,
+    search_tavily,
+    search_naver_news,
+    extract_total_score_from_analysis,
+    extract_checklist_scores,
+    extract_insufficient_items,
+    get_analysis_score,
+    format_checklist_items,
+    create_analysis_prompt_template
+)
 
 # PDF/마크다운 출력 함수 등 (간단 버전)
 BASE_DIR = os.getcwd()
@@ -180,8 +197,8 @@ def analyze_product(state: AgentState) -> AgentState:
 
     state["상품_점수"] = score
     state["상품_분석_근거"] = analysis
-    print(state["상품_점수"])
-    print(state["상품_분석_근거"])
+    print(f"\n[DEBUG] 상품/서비스 분석 완료 - 점수: {score}")
+    print(f"[DEBUG] 판단 근거 (앞 500자): {analysis[:500]}...")
     return state
 
 def analyze_technology(state: "AgentState") -> "AgentState":
@@ -236,6 +253,8 @@ def analyze_technology(state: "AgentState") -> "AgentState":
 
     state["기술_점수"] = score
     state["기술_분석_근거"] = analysis
+    print(f"\n[DEBUG] 기술 분석 완료 - 점수: {score}")
+    print(f"[DEBUG] 판단 근거 (앞 500자): {analysis[:500]}...")
     return state
 
 def analyze_growth(state: "AgentState") -> "AgentState":
@@ -281,6 +300,8 @@ def analyze_growth(state: "AgentState") -> "AgentState":
 
     state["성장률_점수"] = score
     state["성장률_분석_근거"] = analysis
+    print(f"\n[DEBUG] 성장률 분석 완료 - 점수: {score}")
+    print(f"[DEBUG] 판단 근거 (앞 500자): {analysis[:500]}...")
     return state
 
 def internal_judgement(state: AgentState) -> AgentState:
@@ -330,7 +351,7 @@ def analyze_market(state: Dict[str, Any]) -> Dict[str, Any]:
     )
     retrieved_docs = ensemble_retriever.get_relevant_documents(f"{startup_name} 시장성, 시장 규모, 성장성, 수요 동향, 트렌드")
     print(f"\n[DEBUG] 하이브리드 RAG 검색 결과 - 총 {len(retrieved_docs)}개")
-    for i, doc in enumerate(retrieved_docs):
+    for i, doc in enumerate(retrieved_docs[:3]):  # 상위 3개만 출력
         print(f"\n[하이브리드 RAG 결과 {i+1}] (Page: {doc.metadata.get('page', '알 수 없음')})\n{doc.page_content[:300]}...")
     rag_context = "\n\n".join([f"(Page: {doc.metadata.get('page', '알 수 없음')})\n{doc.page_content}" for doc in retrieved_docs]) or "PDF에서 유의미한 정보 없음"
     # Tavily, Web Search 등 이하 기존 코드 동일
@@ -341,7 +362,7 @@ def analyze_market(state: Dict[str, Any]) -> Dict[str, Any]:
 
     combined_context = f"[PDF 기반 RAG 검색 결과]\n{rag_context}\n\n[웹 검색 결과]\n{web_context}"
 
-    print(f"\n[DEBUG] 최종 combined_context (앞 1000자):\n{combined_context[:1000]}...")
+    # print(f"\n[DEBUG] 최종 combined_context (앞 1000자):\n{combined_context[:1000]}...")
 
     checklist = [
         "시장 규모 및 성장성",
@@ -377,13 +398,15 @@ def analyze_market(state: Dict[str, Any]) -> Dict[str, Any]:
     })
 
     analysis = response.content
-    print(f"\n[DEBUG] LLM 응답 (앞 1000자):\n{analysis[:1000]}...")
+    # print(f"\n[DEBUG] LLM 응답 (앞 1000자):\n{analysis[:1000]}...")
 
     score = get_analysis_score(analysis, checklist)
 
-    print(f"\n[DEBUG] 최종 총점: {score}")
+    # print(f"\n[DEBUG] 최종 총점: {score}")
     state["시장성_점수"] = score
     state["시장성_분석_근거"] = analysis
+    print(f"\n[DEBUG] 시장성 분석 완료 - 점수: {score}")
+    print(f"[DEBUG] 판단 근거 (앞 500자): {analysis[:500]}...")
     return state
 
 def analyze_competitor(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -397,9 +420,9 @@ def analyze_competitor(state: Dict[str, Any]) -> Dict[str, Any]:
     search_tool = TavilySearchResults(k=20)
     search_results = search_tool.invoke(f"{startup_name} 경쟁사 AI 스타트업 시장 분석 최근 6개월 기사")
 
-    print(f"\n[DEBUG] 검색된 기사 수: {len(search_results)}개")
-    for idx, result in enumerate(search_results, 1):
-        print(f"{idx}. {result['title']}")
+    # print(f"\n[DEBUG] 검색된 기사 수: {len(search_results)}개")
+    # for idx, result in enumerate(search_results, 1):
+    #     print(f"{idx}. {result['title']}")
 
     if len(search_results) < 10:
         print("[경고] 검색된 기사 수가 10개 미만입니다. 정보 부족으로 분석 신뢰도가 낮을 수 있습니다.")
@@ -449,17 +472,18 @@ def analyze_competitor(state: Dict[str, Any]) -> Dict[str, Any]:
     })
 
     analysis = response.content
-    print("\n[DEBUG] LLM 응답 내용:")
-    print(analysis)
+    # print("\n[DEBUG] LLM 응답 내용:")
+    # print(analysis)
 
     score = extract_total_score_from_analysis(analysis)
     if score is None:
-        print("\n[DEBUG] 총점 파싱 실패 → extract_checklist_scores_competitor()에서 항목별 점수 직접 계산")
+        # print("\n[DEBUG] 총점 파싱 실패 → extract_checklist_scores_competitor()에서 항목별 점수 직접 계산")
         score = extract_checklist_scores_competitor(analysis, checklist)
 
     state["경쟁사_점수"] = score
     state["경쟁사_분석_근거"] = analysis
-    print(f"[DEBUG] 최종 총점: {score}")
+    print(f"\n[DEBUG] 경쟁사 분석 완료 - 점수: {score}")
+    print(f"[DEBUG] 판단 근거 (앞 500자): {analysis[:500]}...")
     return state
 
 def extract_total_score_from_analysis(analysis: str) -> int:
@@ -472,17 +496,17 @@ def extract_total_score_from_analysis(analysis: str) -> int:
     for pattern in patterns:
         match = re.search(pattern, analysis, re.IGNORECASE)
         if match:
-            print(f"[DEBUG] 정규표현식으로 직접 파싱된 총점: {match.group(1)}")
+            # print(f"[DEBUG] 정규표현식으로 직접 파싱된 총점: {match.group(1)}")
             return int(match.group(1))
     return None
 
-def extract_checklist_scores(analysis: str, checklist: List[str]) -> int:
-    """체크리스트 항목별 점수를 유연하게 파싱 (다양한 표현 허용)"""
+def extract_checklist_scores_competitor(analysis: str, checklist: List[str]) -> int:
+    """경쟁사 분석용 체크리스트 항목별 점수를 유연하게 파싱 (다양한 표현 허용)"""
     # ✅ 총점 제거
     clean_analysis = re.sub(r"총점[:：]?\s*\d{1,3}\s*(?:점|/100)?", "", analysis, flags=re.IGNORECASE)
 
     total_score = 0
-    print("\n[DEBUG] 체크리스트별 점수 파싱 시작:")
+    # print("\n[DEBUG] 체크리스트별 점수 파싱 시작:")
     for i, item in enumerate(checklist, 1):
         # 모든 항목 공통적으로 사용할 패턴 리스트 (가장 일반적 → 구체적 순서로)
         patterns = [
@@ -498,20 +522,39 @@ def extract_checklist_scores(analysis: str, checklist: List[str]) -> int:
             match = re.search(pattern, clean_analysis, re.DOTALL | re.IGNORECASE)
             if match:
                 item_score = int(match.group(1))
-                print(f"- 항목 {i}: {item} → 점수: {item_score}")
+                # print(f"- 항목 {i}: {item} → 점수: {item_score}")
                 total_score += item_score
                 found = True
                 break
         if not found:
-            print(f"- 항목 {i}: {item} → 점수 찾지 못함 (0점 처리)")
+            # print(f"- 항목 {i}: {item} → 점수 찾지 못함 (0점 처리)")
+            pass
 
-    print(f"[DEBUG] 체크리스트 총합 (정확한 합산): {total_score}")
+    # print(f"[DEBUG] 체크리스트 총합 (정확한 합산): {total_score}")
     return min(100, max(0, total_score))
 
 def final_judgement(state: AgentState) -> AgentState:
     avg_internal = (state["상품_점수"] + state["기술_점수"] + state["성장률_점수"]) / 3
-    avg_total = (avg_internal + state["시장성_점수"] + state["경쟁사_점수"]) / 3
+    
+    # 시장성과 경쟁사 점수가 있는 경우에만 포함
+    if "시장성_점수" in state and "경쟁사_점수" in state:
+        avg_total = (avg_internal + state["시장성_점수"] + state["경쟁사_점수"]) / 3
+    else:
+        avg_total = avg_internal
+    
     state["최종_판단"] = "투자" if avg_total >= 65 else "보류"
+    
+    print(f"\n[DEBUG] 최종 판단 완료:")
+    print(f"  - 상품/서비스: {state.get('상품_점수', 0)}")
+    print(f"  - 기술: {state.get('기술_점수', 0)}")
+    print(f"  - 성장률: {state.get('성장률_점수', 0)}")
+    if "시장성_점수" in state:
+        print(f"  - 시장성: {state['시장성_점수']}")
+    if "경쟁사_점수" in state:
+        print(f"  - 경쟁사: {state['경쟁사_점수']}")
+    print(f"  - 평균: {avg_total:.1f}")
+    print(f"  - 최종 판단: {state['최종_판단']}")
+    
     return state
 
 def generate_report(state: AgentState) -> AgentState:
@@ -578,8 +621,20 @@ if __name__ == "__main__":
     graph.add_edge("GenerateReport", "GeneratePDF")
     graph.add_edge("GeneratePDF", END)
     compiled_graph = graph.compile()
-    initial_state = {"startup_name": "업스테이지"}  # 분석할 스타트업 이름 설정
+    
+    # 사용자로부터 스타트업 이름 입력받기
+    startup_name = input("분석할 스타트업 이름을 입력하세요: ").strip()
+    if not startup_name:
+        print("스타트업 이름이 입력되지 않았습니다. 프로그램을 종료합니다.")
+        exit()
+    
+    print(f"\n'{startup_name}' 스타트업에 대한 투자 분석을 시작합니다...")
+    print("=" * 50)
+    
+    initial_state = {"startup_name": startup_name}
     result = compiled_graph.invoke(initial_state)
-    print(f"보고서 생성 완료: {result['pdf_path']}")
+    
+    print("\n" + "=" * 50)
+    print(f"분석 완료! 보고서가 생성되었습니다: {result['pdf_path']}")
     print("\n--- 보고서 내용 미리보기 ---\n")
     print(result["보고서"][:500] + "...")
