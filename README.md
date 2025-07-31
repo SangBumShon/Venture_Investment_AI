@@ -19,7 +19,6 @@
 
 - Ensemble Retriever를 통한 고품질 정보 검색
     - BM25 + Vector Search 조합으로 검색 정확도 향상
-    - Sentence-BERT CrossEncoder를 통한 문서 재순위화
 
 - Pinecone Vector Database 활용
     - 확장 가능한 클라우드 벡터 저장소로 대용량 문서 처리
@@ -40,7 +39,6 @@
 | LLM        | GPT-4o via OpenAI API               |
 | Output Parser | JSON OutputParser with Pydantic     |
 | Retrieval  | Ensemble Retriever (BM25 + Vector)  |
-| Reranker   | Sentence-BERT CrossEncoder          |
 | VectorDB   | Pinecone                                |
 | PDF Report | ReportLab                           |
 | State Mgmt | TypedDict 기반 상태 공유 (AgentState)|
@@ -72,7 +70,6 @@
 │   └── schemas.py                        # Pydantic 모델 정의
 ├── startup_invest_evaluation.py          # 메인 실행 스크립트
 ├── startup_invest_evaluation.ipynb       # Jupyter 노트북 버전
-├── test_new_features.py                  # 새로운 기능 테스트 스크립트
 ├── requirements.txt                      # Python 패키지 의존성
 └── README.md
 ```
